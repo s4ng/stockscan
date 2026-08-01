@@ -1,0 +1,36 @@
+# tradeflow — 개인용 Self-hosted 구성
+#
+# 기본 바인딩은 127.0.0.1이다. 이 시스템에는 거래소·증권사 API 키가 저장되므로
+# 인증 없이 인터넷에 노출해서는 안 된다. 원격 접속이 필요하면 리버스 프록시와
+# 인증을 반드시 앞에 두고, 그때 포트 바인딩을 바꾼다.
+
+services:
+  api:
+    build:
+      context: ./backend
+    image: tradeflow-api:0.1.0
+    restart: unless-stopped
+    environment:
+      TRADEFLOW_DEBUG: "false"
+      TRADEFLOW_DATABASE_URL: "sqlite+aiosqlite:///./data/tradeflow.db"
+      # 자격 증명 암호화 마스터 키. .env에서 주입한다.
+      # 이 키를 잃으면 저장된 API 키를 복호화할 수 없다 (백업 대상).
+      TRADEFLOW_MASTER_KEY: "${TRADEFLOW_MASTER_KEY:-}"
+      # Phase 5 전까지는 항상 false를 유지한다.
+      TRADEFLOW_LIVE_TRADING_ENABLED: "false"
+      TZ: "UTC"
+    volumes:
+      # ohlcv_cache는 무료 소스가 막혀도 남는 유일한 데이터 자산이다. 백업 대상.
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  web:
+    build:
+      context: ./frontend
+    image: tradeflow-web:0.1.0
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:5173:80"

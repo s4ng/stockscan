@@ -1,0 +1,8 @@
+# 저장소에는 항상 LF로 보관한다.
+# Windows에서 개발하고 Linux 컨테이너에서 빌드하므로, 줄바꿈이 섞이면
+# Docker 빌드나 diff에서 불필요한 잡음이 생긴다.
+* text=auto eol=lf
+
+# 잠금 파일은 diff를 접어 둔다 (리뷰 노이즈 방지)
+uv.lock       linguist-generated=true -diff
+pnpm-lock.yaml linguist-generated=true -diff
