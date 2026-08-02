@@ -16,6 +16,11 @@ dependencies = [
     "pyyaml>=6.0",
     # 코인 일봉. 거래소당 어댑터를 만들지 않기 위한 유일한 이유다 (3.3).
     "ccxt>=4.4",
+    "pykrx>=1.0.51",
+    "finance-datareader>=0.9.202",
+    "yfinance>=1.5.2",
+    "exchange-calendars>=4.13.2",
+    "setuptools<81",
 ]
 
 [project.scripts]
