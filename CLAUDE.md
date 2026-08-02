@@ -4,139 +4,162 @@
 
 ## 프로젝트
 
-**tradeflow** — 노드 기반 비주얼 파이프라인으로 암호화폐·한국주식·미국주식의 매매 신호를
-만드는 개인용 Self-hosted 시스템. n8n/ComfyUI 같은 캔버스에서 노드를 조합하면 백엔드
-DAG 엔진이 실행한다.
+**marketscan** — 암호화폐·한국주식·미국주식을 **하나의 유니버스로 매일 훑어**, 볼 만한 소수의
+후보를 알림으로 올려주는 개인용 CLI. **예측 기계가 아니라 주의력 기계다** — 시장을 맞히는 것이
+아니라 혼자서는 볼 수 없는 범위를 대신 보고 정해둔 규칙을 대신 지킨다. 최종 판단은 사람이 한다.
 
 **`ARCHITECTURE.md`가 설계의 단일 출처다.** 구조를 바꾸는 작업 전에 반드시 읽고,
 설계를 바꿨다면 그 문서도 함께 갱신한다.
 
-현재 **Phase 0 완료**. 시세는 `synthetic` 더미 소스만 있고 실제 어댑터는 Phase 2다.
+**현재 Phase 1 완료 기준 충족 · 자동 실행 방식 결정 1건 남음.**
+남은 작업 목록은 `README.md`의 체크박스를 본다.
+
+| | v0.4 (걷어냄) | **v0.5 (현재 코드)** |
+| :--- | :--- | :--- |
+| 인터페이스 | FastAPI + React 캔버스 | **CLI (Typer)** |
+| 전략 표현 | 지표 노드 조합 | **파이썬 클래스 1개** |
+| 판단 단위 | 백테스트 일봉 / 알림 분봉 | **일봉·주봉 전용** |
+| 전략의 축 | 시계열 필터 체인 | **횡단면 랭킹** |
+| 정의 형식 | DAG JSON | **YAML** (§11-4 확정 — 스키마는 그대로) |
+| 자동 실행 | APScheduler | ⚠️ **미정** — OS 스케줄러 vs `serve` (§11-4b) |
+
+**코인 시세는 실물이다** (`CcxtProvider` · 업비트). **주식은 아직 `synthetic` 더미**이고
+실제 소스 4종은 Phase 2다. 이 비대칭을 잊고 `krx` 결과를 실제 시세로 읽지 않는다.
+
+`frontend/` · `docker-compose.yml` · `Dockerfile` · `app/main.py` · `app/api/`는 이미 삭제됐다.
+**되살리지 않는다.**
+
+**자동 실행 방식은 정해지지 않았다.** 스케줄을 전제한 코드를 쓰지 않는다 — `run --commit`을
+무엇이 부르든 동작이 같아야 하고, 그래서 결정을 미룰 수 있다. `serve`를 지금 만들지 않는다.
 
 ## 명령
 
 ```bash
-# 백엔드 (backend/)
 uv sync
 uv run pytest -q
-uv run uvicorn app.main:app --reload
+uv run ruff check app tests
 
-# 프론트엔드 (frontend/)
-pnpm install
-pnpm dev
-pnpm typecheck          # tsc --noEmit (TypeScript 7 네이티브 컴파일러)
-
-# 전체
-docker compose up --build
+uv run marketscan describe          # 전략·파이프라인·마지막 실행
+uv run marketscan run               # dry-run (기본)
+uv run marketscan run --commit      # 부작용 허용
 ```
 
-## 환경 제약 (2026-08 기준)
-
-- **Node는 22 LTS 이상이 필요하다.** pnpm 11이 `>=22.13`, Vite 8이 `>=22.12`를 요구한다.
-  (개발 PC는 v24.18.1로 확인됨.)
-- **`corepack enable pnpm`을 인자 없이 쓰면 실패한다.** `C:\Program Files\nodejs`에 심을
-  만들려다 EPERM이 난다. 이 PC는 아래 방식으로 설치되어 있다 (관리자 권한 불필요):
-
-  ```powershell
-  corepack enable --install-directory "$env:APPDATA\npm" pnpm
-  ```
-
-  이 폴더는 이미 PATH에 있다. 재설치가 필요하면 위 명령을 그대로 쓴다.
-- **`package.json`의 스크립트에서 `pnpm`을 셸아웃하지 않는다.** 심이 없는 환경에서 깨진다.
-  `build`는 `tsc --noEmit && vite build`처럼 바이너리를 직접 호출한다.
-- **ESLint는 의도적으로 도입하지 않았다.** `typescript-eslint@8`의 peer가
-  `typescript >=4.8.4 <6.1.0`이라 TypeScript 7과 충돌한다. TS 7 지원이 나오면 추가한다.
-  그때까지 정적 검사는 `pnpm typecheck`가 담당한다.
-- `pnpm-lock.yaml`을 커밋한 뒤 `frontend/Dockerfile`의 `pnpm install`을
-  `pnpm install --frozen-lockfile`로 바꿀 것.
+- **저장소는 최상위로 평탄화됐다.** `backend/`는 없다. `cd`하지 않는다.
+- **Node·pnpm·TypeScript·Docker는 이 저장소에 없다.** 프론트엔드 툴체인은 전부 제거됐다.
+- 환경변수 접두사는 **`MARKETSCAN_`**. `.env.example` 참조.
+- **시세에는 자격 증명이 필요 없다** — 일봉 고정으로 무인증 소스만 쓴다
+  (PyKRX · yfinance · FDR · CCXT 공개 OHLCV). 남는 비밀은 텔레그램 토큰과 LLM 키뿐이다.
 
 ## 절대 깨면 안 되는 규칙
 
 이것들은 어기면 조용히 잘못된 신호가 나가거나 백테스트가 거짓말을 한다.
 
-1. **노드 안에서 `datetime.now()`를 호출하지 않는다.** 모든 시각은 `ctx.now`에서 온다.
+1. **노드·전략 안에서 `datetime.now()`를 호출하지 않는다.** 모든 시각은 `ctx.now`에서 온다.
    이 규칙 하나가 백테스트와 실거래를 같은 코드 경로로 묶는다.
 2. **Provider는 `end` 이후 캔들을 반환하지 않는다.** 반환 직전에
    `assert_no_future(df, end, self.id)`를 호출한다. 미래 참조는 폴백으로 감추지 말고 그대로 터뜨린다.
-3. **필터 노드는 `ohlcv`를 보존한 채 `items`만 걸러낸다.** DataFrame을 버리면 뒤에
+3. **전략의 `compute`는 인과적이어야 한다.** `rolling` · `ewm` · `shift(+n)`은 안전하고,
+   **`shift(-n)` · `center=True` · `bfill`은 미래를 본다.** 백테스트 전체를 조용히 무너뜨리는
+   가장 흔한 경로다. `marketscan strategy check`가 AST로 잡지만 통과가 보장은 아니다 —
+   사후 방어선은 난수 신호 테스트다.
+4. **필터 노드는 `ohlcv`를 보존한 채 `items`만 걸러낸다.** DataFrame을 버리면 뒤에
    필터를 이어붙일 수 없다. 판단 근거는 `features`/`tags`에 남긴다.
-4. **모든 시각은 tz-aware UTC로 저장한다.** 표시할 때만 `settings.user_timezone`으로 변환한다.
+5. **모든 시각은 tz-aware UTC로 저장한다.** 표시할 때만 `settings.user_timezone`으로 변환한다.
    naive datetime은 `_as_utc()`가 거부한다.
    DB 컬럼은 `DateTime(timezone=True)`가 아니라 **`UtcDateTime`**을 쓴다 — SQLite는
-   tzinfo를 저장하지 않아서, 그냥 두면 naive로 새어 나오고 프론트의 `new Date()`가
-   그걸 로컬 시각으로 오해해 표시가 통째로 어긋난다.
-5. **미국 시장에 고정 오프셋(UTC-5)을 쓰지 않는다.** 반드시 `ZoneInfo("America/New_York")`.
+   tzinfo를 저장하지 않아서, 그냥 두면 naive로 새어 나온다.
+6. **미국 시장에 고정 오프셋(UTC-5)을 쓰지 않는다.** 반드시 `ZoneInfo("America/New_York")`.
    서머타임 때문에 한국 기준 개장 시각이 1시간 움직인다.
-6. **API 키를 DAG JSON에 넣지 않는다.** 노드는 Connection ID만 참조한다.
+7. **API 키를 파이프라인 정의에 넣지 않는다.** 노드는 Connection ID만 참조한다.
    파이프라인을 export해도 키가 새지 않아야 한다.
-7. **`adjusted`(수정주가)는 캐시 키에 포함한다.** 조정가/비조정가가 섞이면 지표가 조용히
+8. **`adjusted`(수정주가)는 캐시 키에 포함한다.** 조정가/비조정가가 섞이면 지표가 조용히
    틀어지고 원인 추적이 불가능해진다.
-8. **실주문 코드를 추가하지 않는다.** Phase 5 전까지 `BrokerProvider` 구현체를 만들지 않는다.
+9. **실주문 코드를 추가하지 않는다.** Phase 5 전까지 `BrokerProvider` 구현체를 만들지 않는다.
    현재 범위는 신호 알림이다.
-9. **파이프라인 저장은 덮어쓰지 않는다.** 항상 `pipeline_versions`에 새 버전을 추가한다.
-   과거 스냅샷을 수정하면 "그때 그 신호가 어떤 그래프에서 나왔는지"를 잃는다.
+10. **파이프라인 저장은 덮어쓰지 않는다.** 항상 `pipeline_versions`에 새 버전을 추가한다.
+    **전략 소스의 SHA-256도 함께 기록한다** — 파일을 고치면 과거 버전의 의미가 소급으로 바뀐다.
+11. **부작용은 `--commit`이 있을 때만.** `run`의 기본은 dry-run이다. `signals` 미기록,
+    봉은 `stage()` 후 `discard()`. Fresh Bar Gate가 잘못 발동하면 **그 신호는 영영 사라진다.**
+12. **분봉을 판단에 쓰지 않는다.** 타임프레임은 `1d`/`1w`뿐이다. 단 **정책 계층에서만 막고
+    타입은 건드리지 않는다** — `Literal["1d"]`로 굳히면 되돌릴 수 없다.
+13. **단일 실행은 외부로 아무것도 내보내지 않는다.** `run`의 산출물은 stdout과 HTML 리포트뿐이다.
+    채널 전송은 `serve`의 몫이다 — 손으로 돌릴 때마다 메시지가 나가면 알림을 믿지 않게 되고,
+    그러면 주의력 기계가 무너진다. 바깥으로 나가는 노드는 `sends_external_messages = True`를
+    선언하고, **차단은 노드가 아니라 실행 엔진이 한다** (노드마다 심으면 언젠가 빠뜨린다).
+14. **동적 유니버스는 backtest에서 거부한다.** 거래소가 주는 종목 목록은 언제나 "지금"이라,
+    과거를 리플레이하면 **전략 코드가 완전히 인과적인 채로 유니버스가 미래를 본다**
+    (서바이버십). 규칙 3이 겨누는 것과 같은 사고인데 **AST에 흔적이 남지 않아
+    `strategy check`가 잡지 못한다.** 막을 곳이 `symbolUniverse` 노드뿐이다.
+    조용히 고정 목록으로 물러서지 않는다 — 그러면 사용자가 적지 않은 유니버스로 돌아간다.
+15. **어댑터가 주는 봉 인덱스는 마감 시각이다.** 거래소 API는 대개 **시가 시각**을 주므로
+    (CCXT 포함) 어댑터가 읽자마자 옮긴다. 이 변환이 빠지면 `closed_only`가 진행 중인 봉을
+    통과시켜, 규칙에 다 걸리지 않은 채로 "신호가 생겼다 사라진다" (§4.4).
 
-## API 규칙
+## 백테스트를 대하는 자세
 
-- **고정 경로를 경로 파라미터보다 먼저 선언한다.** FastAPI는 선언 순서대로 매칭하므로,
-  `/pipelines/{pipeline_id}`가 `/pipelines/validate`보다 위에 있으면 `validate`가
-  id로 잡힌다. `app/api/routes.py`의 섹션 주석을 지킬 것.
-- **저장은 검증을 통과하지 못해도 허용한다.** 작업 중인 그래프를 저장하지 못하면 쓸 수 없다.
-  막는 곳은 `/pipelines/run`이다.
+**"이 전략이 돈이 되나?"(❌) → "내 구현이 안 틀렸나?"(✅)**
 
-### 현재 엔드포인트
+- 지표 조합·파라미터를 백테스트로 뒤져 좋은 것을 찾지 않는다. 탐색 공간은 수백만인데
+  일봉 10년은 2,500행이라 **우연히 맞는 조합이 반드시 나온다.**
+- 검증된 팩터의 표준값을 쓴다 (모멘텀 12-1, 밸류 PBR/PER, 퀄리티 ROE, 저변동성).
+  남의 논문 값은 나에게 out-of-sample이지만 내가 고른 값은 아니다.
+- **난수 신호의 hit rate가 기저율을 넘으면 미래 참조가 있는 것이다.** 전략 문제가 아니다.
+- 사용자가 파라미터 튜닝을 반복하면 `backtest_runs` 카운터를 근거로 알린다.
 
-```
-GET    /api/health
-GET    /api/nodes                      노드 카탈로그 (프론트 폼의 단일 출처)
-POST   /api/pipelines/validate
-POST   /api/pipelines/run
-GET    /api/pipelines                  저장 목록
-POST   /api/pipelines                  저장 (id 없으면 신규, 있으면 새 버전)
-GET    /api/pipelines/{id}[?version=N] 불러오기 (기본은 활성 버전)
-GET    /api/pipelines/{id}/versions
-DELETE /api/pipelines/{id}
-```
+## CLI 규칙
 
-## 프론트엔드 구조
+- **읽기 전용이 기본이다.** `explain` · `signals` · `stats` · `describe` · `strategy check`는
+  부작용이 없다 — **DB 파일조차 만들지 않는다** (`_database_exists()`가 먼저 확인한다).
+  부작용은 `--commit`으로만 (규칙 11).
+- **종료 코드로 상태를 구분한다.** `0` 성공(신호 0건 포함 — 빈 `Bundle`은 정상이다) /
+  `2` 데이터 소스 실패 / `3` 검증 실패.
+- **모든 명령에 `--json`.** 스키마를 안정적으로 유지한다. `--json`이면 진행 로그는 stderr로.
+- **`--limit` 기본값을 둔다.** OHLCV 원본은 기본 출력에 넣지 않는다.
+- **부작용 분기를 노드에 심지 않는다.** `--commit` 여부는 CLI가 `ctx.signals` 배출구를
+  갈아 끼우는 것으로 표현한다 (`CollectingSink` ↔ `SqlSignalSink`). 노드마다 분기를 두면
+  언젠가 하나를 빠뜨리고, 그날 봉이 소리 없이 소비된다.
+- **미구현을 성공처럼 보이게 하지 않는다.** `ingest`는 `implemented: false`를 내보낸다.
 
-```
-App.tsx                 셸 — TopAppBar + 화면 전환
-components/TopAppBar    대메뉴: 파이프라인 · 알림 채널 · 연결
-components/PipelineToolbar  이름 · 저장/열기/새로 · 모드 · 실행
-pages/PipelinePage      캔버스 + 팔레트 + 인스펙터
-pages/PlaceholderPage   미구현 화면 공통 껍데기
-```
+## 새 전략을 추가할 때
 
-- **파이프라인 화면은 언마운트하지 않는다** (`hidden` 클래스로 감춘다). 메뉴를 옮겼다고
-  편집 중인 캔버스가 날아가면 안 된다.
-- 라우터 라이브러리를 쓰지 않는다. 화면이 3개뿐이라 상태 전환으로 충분하다.
-  상세 페이지(`/pipelines/:id`)가 생기면 그때 react-router를 넣는다.
-- dirty 판정은 `snapshot(toPayload(...))` 문자열 비교다. 선택 상태 같은 UI 전용 값은
-  `toPayload`에 없으므로 노드를 클릭하는 것만으로는 dirty가 되지 않는다.
+1. `marketscan strategy new <이름>` — 최상위 `strategies/<이름>.py`에 템플릿이 생긴다.
+   **파일 이름과 클래스의 `id`가 같아야 한다.** 로더가 강제한다 (해시가 파일 단위이므로).
+   **파일 하나에 전략 하나.**
+2. `compute`(종목별 시계열) → `rank`(횡단면) → `select`(최종 컷) 순으로 채운다.
+   **`rank`가 중심이다** — 단일 종목 전략이면 `compute`만 채우고 나머지는 기본 구현을 쓴다.
+   기본 `rank`는 `score_feature`를 선언하면 순위·백분위·`universe_size`를 채워 준다.
+3. 파라미터는 `Params` Pydantic 모델로 선언한다. 폼·`--param` 플래그가 여기서 생성된다.
+4. **`compute`의 인과성을 확인한다** (규칙 3). `marketscan strategy check <이름>`.
+5. 전략에 Provider·Cache 핸들을 주지 않는다. 이미 `end`로 잘린 DataFrame만 받는다.
+6. `startup_candles`를 선언한다 — 봉이 모자란 종목을 Strategy Runner가 제외하는 기준이다.
+7. 컷은 `top_n` / `top_pct` 헬퍼를 쓴다 — 절삭 경고가 함께 남는다 (조용한 절삭 금지).
 
 ## 새 노드를 추가할 때
+
+**노드는 이제 배선(데이터 → 전략 → LLM → 알림)이지 전략 표현 수단이 아니다.**
+지표 조건이 필요하면 노드가 아니라 전략 클래스에 넣는다. `Indicator` 범주는 동결이다.
 
 1. `app/nodes/<카테고리>/<이름>.py`에 `BaseNode` 하위 클래스를 만들고 `@register`를 붙인다.
 2. **`app/nodes/__init__.py`에 임포트를 추가한다.** 아직 자동 탐색이 없어서 빠뜨리면
    레지스트리에 등록되지 않는다.
-3. 파라미터는 Pydantic 모델로 선언한다. `Field(description=...)`을 채우면 그대로 UI에
-   설명으로 나온다 — **프론트엔드 폼은 이 JSON Schema에서 자동 생성되므로 프론트를
-   고칠 필요가 없다.**
+3. 파라미터는 Pydantic 모델로 선언한다. `Field(description=...)`을 채운다.
 4. 상류 데이터 없이도 돌아야 하는 소스 노드는 `requires_input = False`로 둔다.
    `inputs`는 `(MAIN,)`으로 두어야 트리거 뒤에 배치할 수 있다.
-5. `backend/tests/`에 테스트를 추가한다. 네트워크 없이 `synthetic` 소스로 돌 것.
+5. `tests/`에 테스트를 추가한다. 네트워크 없이 `synthetic` 소스로 돌 것.
+
+> ⚠️ **계기판: 배선용 노드가 계속 늘어나면** 파이프라인이 다시 전략을 표현하려 드는 것이다.
+> 전략 로직은 전략 클래스 안에 있어야 한다.
 
 ## 코드 관례
 
-- **주석은 "왜"를 적는다.** 무엇을 하는지는 코드가 말한다. 특히 위 8개 규칙과 관련된
+- **주석은 "왜"를 적는다.** 무엇을 하는지는 코드가 말한다. 특히 위 15개 규칙과 관련된
   방어 코드에는 어떤 사고를 막는지 남긴다.
 - 오류 메시지는 한국어로, **다음에 뭘 해야 하는지까지** 적는다.
   예: `"instrument는 'venue:symbol' 형식이어야 합니다. 예: 'upbit:KRW-BTC'"`
 - 심볼은 항상 `InstrumentRef`로 다룬다. 맨 문자열 `"005930"`을 그대로 넘기지 않는다.
 - 조용한 절삭(top-N, 샘플링)을 하면 반드시 `ctx.log.warning`으로 남긴다.
   "전부 처리했다"는 오해가 실사용에서 가장 위험하다.
-- 새 의존성은 꼭 필요할 때만. 특히 프론트엔드는 TS 7 호환을 먼저 확인한다.
+- 새 의존성은 꼭 필요할 때만.
 
 ## 자주 하는 실수
 
@@ -145,4 +168,13 @@ pages/PlaceholderPage   미구현 화면 공통 껍데기
 | 노드가 `skipped`로 끝남 | 상류가 모두 skip/error거나, `requires_input=True`인데 연결된 엣지가 없음 |
 | `알 수 없는 노드 type` | `app/nodes/__init__.py`에 임포트를 안 넣음 |
 | 두 번째 실행에서 결과가 0건 | 정상이다. Fresh Bar Gate가 같은 봉을 stale로 제외한 것 |
-| 백테스트가 422로 거부됨 | 일봉 미만 타임프레임. 의도된 게이트다 (`shadow` 모드를 쓸 것) |
+| 알림이 안 오는데 로그는 정상 | `--commit`을 안 붙였다. 기본이 dry-run이다 (규칙 11) |
+| 백테스트 성과가 비현실적으로 좋음 | `compute`에 `shift(-n)`이 섞였거나 상장폐지 종목이 유니버스에서 빠졌다 |
+| 분봉 타임프레임이 거부됨 | 의도된 제약이다. 판단 단위는 `1d`/`1w`뿐이다 (규칙 12) |
+| 전략이 있는데 신호가 0건 | 봉이 `startup_candles`에 못 미쳐 전량 제외됐다. Market Data의 `lookback`을 늘린다 |
+| `전략 소스가 파이프라인에 기록된 버전과 다릅니다` | 전략 파일을 고쳤다. 의도했다면 `strategy_sha256`을 갱신한다 (규칙 10) |
+| `signals list`가 비어 있음 | `--commit` 없이 돌렸다. dry-run은 DB를 만들지도 않는다 |
+| 어느 노드에서 0건이 됐는지 모르겠음 | `run --json`의 `nodes[].items`를 본다. 0종목을 수집한 노드도 상태는 `success`다 |
+| 코인 유니버스 대비 랭킹 대상이 적음 | 정상이다. 신규 상장은 `startup_candles`(12-1은 274봉)에 못 미쳐 제외된다 |
+| 테스트가 거래소를 두드림 | `tests/conftest.py`가 격리한다. 노드에 `source: synthetic`을 안 박았는지 본다 |
+| `동적 유니버스는 백테스트에서 쓸 수 없습니다` | 의도된 차단이다 (규칙 14). `instruments`에 직접 적는다 |

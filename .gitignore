@@ -23,11 +23,9 @@ venv/
 dist/
 build/
 
-# --- Node ---
-node_modules/
-frontend/dist/
-.vite/
-*.tsbuildinfo
+# --- 산출물 ---
+# 백테스트·실행 리포트 정적 HTML. 재생성 가능하므로 커밋하지 않는다.
+reports/
 
 # --- 에디터 / OS ---
 .vscode/

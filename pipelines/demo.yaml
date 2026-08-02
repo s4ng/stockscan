@@ -1,0 +1,80 @@
+# 기본 파이프라인 — 업비트 원화 마켓 횡단면 모멘텀
+#
+# Phase 1은 시장 하나(업비트)로 좁혀 끝까지 완주하는 것이 목적입니다. 무인증·24/7이라
+# 캘린더 분기도 주말 공백도 없어서, 미지수를 "전략 경로가 도는가" 하나로 좁힐 수 있습니다.
+#
+#   symbolUniverse → marketData → strategyRunner → persistSignal → logAlert
+#
+# 기본은 dry-run입니다. 부작용(signals 기록·봉 소비)은 --commit이 있을 때만 열립니다.
+
+pipeline_id: pipe_upbit_momentum
+version: 1
+name: 업비트 횡단면 모멘텀 12-1
+
+settings:
+  user_timezone: Asia/Seoul
+  default_mode: notify
+  # 업비트 일봉은 UTC 00:00(= KST 09:00)에 마감합니다. 거래소의 실제 경계와 같아야
+  # 캘린더가 판정한 as_of와 받아 온 봉의 경계가 어긋나지 않습니다 (11장 1번).
+  daily_boundary: UTC00
+  adjusted: true
+  max_concurrency: 4
+
+nodes:
+  - id: trigger
+    type: manualTrigger
+    params:
+      note: 사람이 부르든 스케줄러가 부르든 이 노드에서 시작한다
+
+  # 무엇을 훑을 것인가. 손으로 적지 않고 거래소에 묻습니다 — 종목을 고정해 두면
+  # "혼자서는 볼 수 없는 범위를 대신 본다"는 목적에 닿지 않습니다.
+  - id: universe
+    type: symbolUniverse
+    params:
+      venue: upbit
+      quote_currency: KRW      # 원화 마켓만 (BTC·USDT 마켓 제외)
+      top_by_turnover: 30      # 24시간 거래대금 상위 30종목 — 유동성 컷
+    on_error: { policy: retry, max_attempts: 3, fallback: fail }
+
+  - id: data
+    type: marketData
+    params:
+      # instruments를 비워 두면 상류 universe가 정한 목록을 씁니다.
+      timeframe: 1d
+      # 12-1 모멘텀은 273봉이 필요합니다. 모자라면 그 종목은 통째로 제외됩니다.
+      lookback: 320
+      closed_only: true
+      skip_stale: true         # Fresh Bar Gate — 같은 봉을 두 번 판정하지 않는다
+      source: auto
+    on_error: { policy: retry, max_attempts: 3, fallback: skip }
+
+  - id: strategy
+    type: strategyRunner
+    params:
+      strategy_id: cross_momentum_12_1
+      params:
+        # 표준값입니다. 백테스트로 고른 값이 아닙니다 (4.8) — 고치기 전에
+        # strategies/cross_momentum_12_1.py의 docstring을 읽으세요.
+        lookback: 252
+        skip: 21
+        top_pct: 0.2
+
+  - id: persist
+    type: persistSignal
+    params:
+      kind: entry
+
+  - id: alert
+    type: logAlert
+    params:
+      template: >-
+        [{{instrument.venue}}] {{instrument.display_name}} ·
+        순위 {{rank}}/{{universe_size}} ·
+        모멘텀 {{momentum_12_1}} · {{close}} {{instrument.quote_currency}}
+
+edges:
+  - { id: e1, source: trigger, target: universe }
+  - { id: e2, source: universe, target: data }
+  - { id: e3, source: data, target: strategy }
+  - { id: e4, source: strategy, target: persist }
+  - { id: e5, source: persist, target: alert }
