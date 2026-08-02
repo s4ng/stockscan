@@ -238,6 +238,33 @@ def test_explain_returns_the_evidence_chain(workspace: Path):
     assert any(n["node_id"] == "strategy" for n in body["nodes"])
 
 
+def test_explain_records_what_the_rank_was_measured_against(workspace: Path):
+    """분모(`universe_size`)는 점수가 나온 종목 수다. 훑은 종목 수와 구분되어야 한다."""
+    invoke("run", "--now", NOW, "--commit")
+    signal_id = payload(invoke("signals", "list", "--json"))["signals"][0]["id"]
+
+    features = payload(invoke("explain", str(signal_id), "--json"))["strategy"]["features"]
+
+    assert features["universe_scanned"] == 3  # 훑은 종목
+    assert features["universe_size"] == 3  # 그중 점수가 나온 종목
+
+
+@pytest.mark.parametrize(
+    ("features", "expected"),
+    [
+        ({"universe_size": 34, "universe_scanned": 60}, "60종목을 훑어 26종목"),
+        ({"universe_size": 3, "universe_scanned": 3}, ""),  # 같으면 적지 않는다
+        ({"universe_size": 3}, ""),  # 옛 신호에는 없는 값이다
+    ],
+)
+def test_excluded_note_only_appears_when_the_numbers_differ(features: dict, expected: str):
+    note = cli_main._excluded_note(features)
+
+    assert expected in note
+    if not expected:
+        assert note == ""
+
+
 def test_explain_unknown_signal_exits_three(workspace: Path):
     assert invoke("explain", "424242").exit_code == 3
 

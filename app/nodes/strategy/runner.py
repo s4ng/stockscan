@@ -78,6 +78,12 @@ class StrategyRunnerNode(BaseNode):
         ranked = strategy.rank(Bundle(computed, dict(bundle.context)), strategy_params, ctx)
         selected = strategy.select(ranked, strategy_params, ctx)
 
+        # `universe_size`는 **점수가 나온** 종목 수다(rank가 세운다). 훑은 종목 수와
+        # 다르고, 둘을 같은 말로 읽으면 "30개 중 2등"으로 오해한다 — 실제로는 봉이
+        # 모자란 종목이 비교 대상에서 이미 빠져 있다. 분모의 출처를 신호에 남긴다.
+        scanned = len(bundle)
+        selected = selected.map(lambda it: it.with_features(universe_scanned=scanned))
+
         ctx.log.info(
             f"{strategy.id}: {len(bundle)}개 입력 → {len(ranked)}개 랭킹 → {len(selected)}개 선정"
         )

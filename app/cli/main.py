@@ -557,13 +557,27 @@ def explain(
         f"{payload['instrument']} · {payload['as_of']} ({payload['timeframe']})",
         f"전략  {strategy['id']} @ {(strategy['sha256'] or '')[:12]}",
         f"순위  {strategy['features'].get('rank')} / {strategy['features'].get('universe_size')}"
-        f"  (상위 {strategy['features'].get('percentile')}%)",
+        f"  (상위 {strategy['features'].get('percentile')}%)"
+        f"{_excluded_note(strategy['features'])}",
         f"데이터 {payload['data']['source']} · adjusted={payload['data']['adjusted']}"
         f" · fallback_from={payload['data']['fallback_from']}",
         f"실행  {payload['run']['run_id']} · {payload['run']['status']}",
         f"판정  acted={payload['acted']}",
     ]
     out.emit(payload, human)
+
+
+def _excluded_note(features: dict[str, Any]) -> str:
+    """"무엇과 비교해서 이 순위인가"를 밝힌다.
+
+    분모(`universe_size`)는 점수가 나온 종목 수라, 훑은 종목 수와 다르면 그 차이를
+    적어 준다. 안 적으면 "훑은 30개 중 2등"으로 읽힌다.
+    """
+    ranked = features.get("universe_size")
+    scanned = features.get("universe_scanned")
+    if not isinstance(ranked, int) or not isinstance(scanned, int) or scanned <= ranked:
+        return ""
+    return f"  — {scanned}종목을 훑어 {scanned - ranked}종목은 봉 부족으로 제외"
 
 
 async def _explain(out: Out, signal_id: int) -> dict[str, Any] | None:

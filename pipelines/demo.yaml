@@ -33,7 +33,12 @@ nodes:
     params:
       venue: upbit
       quote_currency: KRW      # 원화 마켓만 (BTC·USDT 마켓 제외)
-      top_by_turnover: 30      # 24시간 거래대금 상위 30종목 — 유동성 컷
+      # 24시간 거래대금 상위 N — 유동성 컷.
+      # 30으로 두면 신규 상장이 워밍업(274봉)에 걸려 절반이 빠지고, 실제로 줄
+      # 세우는 대상이 19종목까지 줄어든다. 횡단면 랭킹은 표본이 작으면 의미가
+      # 옅어지므로 넉넉히 잡는다. 이건 "얼마나 넓게 볼 것인가"라 전략 파라미터가
+      # 아니다 — top_pct를 만지는 것과 다르다.
+      top_by_turnover: 60
     on_error: { policy: retry, max_attempts: 3, fallback: fail }
 
   - id: data
