@@ -108,7 +108,14 @@ class Bundle:
 
     @classmethod
     def merge(cls, bundles: Iterable[Bundle]) -> Bundle:
-        """같은 입력 핸들로 들어온 여러 Bundle을 합친다. `Item.key` 기준 중복 제거."""
+        """같은 입력 핸들로 들어온 여러 Bundle을 합친다. `Item.key` 기준 중복 제거.
+
+        ⚠️ **context는 덮어쓴다.** items와 달리 합집합이 아니다. 같은 키를 쓰는 노드
+        둘을 한 노드에 물리면 앞엣것이 조용히 사라진다 — `symbol_universe.py`의
+        TODO가 정확히 이 문제이고, 거기서는 **노드가 여러 venue를 처리하는 쪽**으로
+        푼다. 여기에 키별 예외를 넣지 않는다: context를 쓰는 노드가 늘 때마다 같은
+        고민이 반복된다.
+        """
         merged: dict[tuple[str, str], Item] = {}
         context: dict[str, Any] = {}
         for b in bundles:

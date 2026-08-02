@@ -320,11 +320,50 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로, `--mark
 - [ ] **상장폐지 종목 수집** — `FdrProvider.list_delisted()`까지 됐고, **수집·보관은
       Ingestion Worker에 달려 있습니다.** 폐지 종목의 과거 일봉을 실제로 받을 수
       있다는 것은 확인했습니다 (2018년 이후 폐지 주권 표본 10/10)
+- [ ] ★ **`symbolUniverse`가 venue 목록을 받게 한다** — 아래 참조. **혼합 파이프라인의
+      선행 조건입니다**
 - [ ] Fresh Bar Gate 혼합 파이프라인 검증 (코인+한국+미국 동시)
 - [ ] 두 소스 종가 정합성 검증 (§3.8) — 같은 날 종가가 다르면 경고
 
+#### ⚠️ 지금은 코인만 스캔합니다 — 그리고 시장을 늘리면 조용히 깨집니다
+
+`pipelines/demo.yaml`의 유니버스 노드는 `venue: upbit` 하나입니다. 소스 4종이 전부
+붙었지만 파이프라인이 쓰지 않습니다.
+
+**노드를 3개로 늘리는 것으로는 안 됩니다.** `symbolUniverse`의 `venue`가 단수라
+시장마다 노드가 필요한데, 셋을 `marketData` 하나에 물리면 `Bundle.merge`가 context를
+`dict.update`로 합치면서 **세 노드가 모두 쓰는 `context["universe"]` 키가 덮어써집니다.**
+items는 제대로 합쳐지지만 유니버스는 마지막 것만 남아 **두 시장이 소리 없이 사라집니다.**
+
+**해결: `symbolUniverse`가 venue 목록을 받게 합니다.**
+
+```yaml
+- id: universe
+  type: symbolUniverse
+  params:
+    venues:                        # str | list[str] — 단수 표기도 계속 받는다
+      - { venue: upbit,  quote_currency: KRW, top_by_turnover: 60 }
+      - { venue: krx,    top_by_turnover: 200 }
+      - { venue: nasdaq, top_by_turnover: 100 }
+```
+
+venue마다 `quote_currency`·`top_by_turnover`가 달라야 하므로(코인은 KRW 마켓 제한이
+필요하고 주식은 아님) **목록의 원소는 문자열이 아니라 조건 묶음**이어야 합니다.
+
+- 유동성 컷은 **venue별로 따로** 겁니다. 시장을 섞어 한 번에 자르면 거래대금 단위가
+  달라(원 vs 달러) 비교 자체가 성립하지 않습니다
+- 결과는 하나의 `context["universe"]`로 합칩니다 — 노드가 하나라 덮어쓰기가 발생하지 않습니다
+- `Bundle.merge`에 키별 예외를 넣는 방식은 **택하지 않았습니다.** context를 쓰는 노드가
+  늘 때마다 같은 고민이 반복됩니다
+- 미국 목록에는 거래대금이 없어(FDR이 심볼·이름만 줍니다) `top_by_turnover`가 전량을
+  걸러냅니다. **이 조합은 막거나 경고해야 합니다** — 지금 구현은 "거래대금을 받지 못해
+  제외"를 경고로 남기고 빈 유니버스를 만듭니다
+- 백테스트 차단(규칙 14)은 그대로 유지합니다
+
 **다음 세션은 `ohlcv_cache`부터 시작하는 것이 맞습니다.** 남은 항목 대부분이 캐시에
 매달려 있습니다 — 상장폐지 수집도, 혼합 파이프라인 검증도 수집 계층이 있어야 합니다.
+다만 위 venue 목록 작업은 분량이 작고 혼합 파이프라인의 선행 조건이라 **먼저 해도
+됩니다.**
 
 ### Phase 3 — 백테스트
 

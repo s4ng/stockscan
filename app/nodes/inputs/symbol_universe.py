@@ -41,6 +41,19 @@ UNIVERSE_KEY = "universe"
 #: 유니버스 산출 근거. node_runs에 남아 "그날 왜 이 종목들이었나"를 되짚게 한다.
 UNIVERSE_META_KEY = "universe_meta"
 
+# ⚠️ TODO(Phase 2): `venue`를 목록으로 받는다 — 혼합 파이프라인의 선행 조건이다.
+#
+# 지금은 venue가 단수라 시장마다 노드가 하나씩 필요한데, 그렇게 만든 노드 셋을
+# marketData 하나에 물리면 **두 시장이 소리 없이 사라진다.** `Bundle.merge`가
+# context를 dict.update로 합치는데 세 노드가 모두 UNIVERSE_KEY를 쓰기 때문이다
+# (items는 제대로 합쳐지므로 겉보기에는 정상이다).
+#
+# 노드 하나가 여러 venue를 처리하면 덮어쓰기가 애초에 생기지 않는다. 유동성 컷은
+# **venue별로 따로** 걸어야 한다 — 시장을 섞어 한 번에 자르면 거래대금 단위가
+# 달라(원 vs 달러) 비교가 성립하지 않는다.
+#
+# 설계와 예시 YAML은 README의 Phase 2 항목을 본다.
+
 
 class SymbolUniverseParams(BaseModel):
     instruments: list[str] = Field(
