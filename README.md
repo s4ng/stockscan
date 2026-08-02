@@ -306,14 +306,25 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로, `--mark
 ⚠️ **시세는 코인만 실물입니다.** `krx` · `nasdaq`은 아직 `synthetic` 더미 소스이고,
 실제 소스 4종은 Phase 2입니다.
 
-### Phase 2 — 멀티 마켓 ★ 존재 이유
+### Phase 2 — 멀티 마켓 ★ 존재 이유 — **진행 중**
 
-- [ ] `MarketCalendar` 3종 (24x7 / KRX / US) + 서머타임 전환일 회귀 테스트
-- [ ] 무인증 일봉 소스 4종 — `PykrxProvider` · `YFinanceProvider` · `FdrProvider` · `CcxtProvider`
-- [ ] Routing Table + 폴백 가시화 (`failed_sources`)
-- [ ] Ingestion Worker + `ohlcv_cache` 영구 보관 + 수정주가 정책
-- [ ] **상장폐지 종목 수집** — 서바이버십 편향 방지 (§3.9)
+- [x] `MarketCalendar` 3종 (24x7 / KRX / US) + 서머타임 전환일 회귀 테스트
+      — `exchange_calendars`(XKRX · XNYS). 휴장일·조기폐장이 실제 값으로 들어옵니다
+- [x] 무인증 일봉 소스 4종 — `PykrxProvider` · `YFinanceProvider` · `FdrProvider` · `CcxtProvider`
+- [x] Routing Table — `krx: pykrx→fdr` · `nasdaq/nyse: yfinance→fdr` · `upbit: ccxt`
+- [ ] **폴백 가시화 회귀 테스트** — `failed_sources` 경로는 구현돼 있으나 실제 소스
+      조합으로는 아직 검증하지 않았습니다
+- [ ] **Ingestion Worker + `ohlcv_cache` 영구 보관** — 지금은 `Market Data`가 실행마다
+      Provider를 직접 호출합니다. §3.9가 "캐시는 성능이 아니라 데이터 자산"이라고
+      정한 지점이고, `marketscan ingest`는 여전히 `implemented: false`입니다
+- [ ] **상장폐지 종목 수집** — `FdrProvider.list_delisted()`까지 됐고, **수집·보관은
+      Ingestion Worker에 달려 있습니다.** 폐지 종목의 과거 일봉을 실제로 받을 수
+      있다는 것은 확인했습니다 (2018년 이후 폐지 주권 표본 10/10)
 - [ ] Fresh Bar Gate 혼합 파이프라인 검증 (코인+한국+미국 동시)
+- [ ] 두 소스 종가 정합성 검증 (§3.8) — 같은 날 종가가 다르면 경고
+
+**다음 세션은 `ohlcv_cache`부터 시작하는 것이 맞습니다.** 남은 항목 대부분이 캐시에
+매달려 있습니다 — 상장폐지 수집도, 혼합 파이프라인 검증도 수집 계층이 있어야 합니다.
 
 ### Phase 3 — 백테스트
 
@@ -340,7 +351,9 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로, `--mark
 ### 확인 필요
 
 - [ ] PyPI · GitHub에서 `marketscan` 이름 충돌 확인
-- [ ] 상장폐지 종목의 과거 가격을 어디까지 받을 수 있는가 — **Phase 2의 실질적 선행 조건**
+- [x] 상장폐지 종목의 과거 가격을 어디까지 받을 수 있는가 — **받을 수 있습니다.**
+      PyKRX·FDR 모두 폐지 종목 일봉을 줍니다 (2018년 이후 폐지 주권 표본 10/10).
+      `SecuGroup == '주권'`만 조회되고, 신주인수권증서 등은 빈 결과입니다
 - [ ] 코인 일봉 경계 `UTC00` vs `KST00` — 일봉이 유일한 판단 단위라 중요도가 올라감
 
 ---
