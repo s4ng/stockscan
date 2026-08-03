@@ -993,7 +993,7 @@ edges:
 marketscan/
 ├── ARCHITECTURE.md · CLAUDE.md · README.md
 ├── pyproject.toml · uv.lock       # ★ Docker를 대신하는 재현성 장치
-├── pipelines/demo.yaml            # 파이프라인 정의 (6장)
+├── pipelines/                     # 파이프라인 정의 (6장). trend.yaml이 기본값
 ├── strategies/                    # ★ 사용자 전략 (정본). git 관리, 해시가 버전에 박힘
 ├── data/                          # SQLite. 백업 대상
 ├── reports/                       # 실행·백테스트 리포트 (재생성 가능)
@@ -1001,17 +1001,18 @@ marketscan/
 │   ├── cli/          main.py · output.py(종료 코드·--json) · pipeline_file.py
 │   ├── engine/       types.py(Item·Bundle) · context.py · graph.py · runner.py
 │   │                 signals.py(배출구) · state.py(Fresh Bar Gate) · expr.py · template.py
-│   ├── market/       instrument.py · calendar.py · timeframe.py
-│   ├── providers/    base.py · registry.py(라우팅·폴백) · ohlcv_source.py(캐시 계층)
+│   ├── market/       instrument.py(InstrumentRef·VenueSpec.market) · calendar.py · timeframe.py
+│   ├── providers/    base.py · registry.py(라우팅·폴백)
+│   │                 ohlcv_source.py(봉 캐시 계층) · universe_source.py(마스터 캐시 계층)
 │   │                 ccxt_base.py + ccxt_quirks/ · pykrx · yfinance · fdr · synthetic
 │   ├── ingest/       worker.py — 수집 대상 도출·수집 (3.9)
 │   ├── nodes/        registry.py + triggers/ inputs/ strategy/ logic/ actions/ indicators/(동결)
-│   ├── strategies/   base.py(Protocol) · registry.py(로더·해시) · check.py(AST)
-│   ├── storage/      models.py · db.py · repository.py · history.py
-│   │                 ohlcv_cache.py · bar_state.py
+│   ├── strategies/   base.py(Protocol·시장별 rank) · registry.py(로더·해시) · check.py(AST)
+│   ├── storage/      models.py · db.py(스키마 드리프트 검사) · repository.py · history.py
+│   │                 ohlcv_cache.py · instruments.py(심볼 마스터) · bar_state.py
 │   ├── report/       run_report.py(실행 1회·표만) · review_report.py(★ 이력·차트)
 │   │                 vendor/ — lightweight-charts standalone + LICENSE (2.1)
-│   └── core/         config.py
+│   └── core/         config.py · formatting.py(가격·시각 표기의 단일 출처)
 └── tests/
 ```
 

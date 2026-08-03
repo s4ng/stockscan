@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     #: 실행할 파이프라인 정의. 형식은 **YAML로 확정**됐다 (11장 4번, Phase 1에서 해소).
     #: 로더가 확장자로 갈라 받으므로 기존 `.json` 파일도 그대로 읽힌다.
-    pipeline_path: Path = Path("pipelines/demo.yaml")
+    #: 기본은 추세추종(trend_breakout_55)이다. 12-1 횡단면 모멘텀은
+    #: `pipelines/demo.yaml`에 그대로 있고 `-p`로 부른다.
+    pipeline_path: Path = Path("pipelines/trend.yaml")
 
     #: 백테스트·실행 리포트 산출물. 서빙하지 않고 파일로 떨어뜨린다 (2.1).
     reports_dir: Path = Path("reports")

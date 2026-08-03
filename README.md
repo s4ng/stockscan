@@ -44,8 +44,8 @@
 > 뽑고, 12-1 모멘텀으로 줄 세우고, 신호를 남기고, `explain`으로 되짚을 수 있습니다.
 > **시세 소스 4종(PyKRX · yfinance · FDR · CCXT)과 `ohlcv_cache` 수집 계층이 붙었습니다.**
 >
-> **★ 세 시장을 한 번에 훑습니다.** `pipelines/demo.yaml` 하나로 코인·한국·미국이
-> 동시에 돕니다. 실측(2026-08-03 기준):
+> **★ 세 시장을 한 번에 훑습니다.** 파이프라인 하나로 코인·한국·미국이 동시에 돕니다.
+> 실측(2026-08-03 기준, `-p pipelines/demo.yaml` 12-1 모멘텀):
 >
 > ```
 > market     pool  signals   상위
@@ -57,6 +57,9 @@
 > **순위가 시장마다 1번부터 다시 시작합니다** — 랭킹·컷이 시장 안에서만 이뤄지기
 > 때문입니다(규칙 17). 섞어 세면 분산이 넓은 코인이 위를 쓸어가 모멘텀이 아니라
 > 변동성으로 줄 세운 것이 됩니다.
+>
+> **기본 전략은 추세추종(`trend_breakout_55`)입니다.** 같은 날 신호는 2건이었습니다 —
+> 돌파는 상태가 아니라 **사건**이라 0건인 날이 대부분입니다. 그게 정상입니다.
 >
 > ⚠️ **`review`와 `serve`는 아직 없습니다** — Phase 3입니다.
 
@@ -112,18 +115,21 @@ marketscan run
 ```
 
 ```
-실행 run_c606937a98e9 · pipe_demo · mode=notify · success
-기준 시각 2026-08-01T06:30:00+00:00
+실행 run_875ba1e0bee8 · pipe_multimarket_momentum · mode=notify · success
+기준 시각 2026-08-04 06:00 (KST)
 
-종목         봉  as_of                      순위  전략
------------  --  -------------------------  ----  -------------
-krx:000660   1d  2026-07-31T06:30:00+00:00  1     demo_momentum
-nasdaq:AAPL  1d  2026-07-31T20:00:00+00:00  2     demo_momentum
-nasdaq:MSFT  1d  2026-07-31T20:00:00+00:00  3     demo_momentum
+종목             이름            종가 (등락)      봉  봉 마감 (KST)     시장    순위  전략
+---------------  --------------  ---------------  --  ----------------  ------  ----  -------------------
+upbit:KRW-USDT   테더            1,431 (-0.76%)   1d  2026-08-03 09:00  crypto  1     cross_momentum_12_1
+upbit:KRW-NEAR   니어프로토콜    2,455 (+1.66%)   1d  2026-08-03 09:00  crypto  2     cross_momentum_12_1
+krx:043260       성호전자        15,870 (+6.22%)  1d  2026-08-03 15:30  krx     1     cross_momentum_12_1
+nasdaq:SNDK      Sandisk Corp    1,249 (+2.78%)   1d  2026-08-04 05:00  us      1     cross_momentum_12_1
 
 리포트 /path/to/reports/latest.html
 ※ dry-run입니다. signals 미기록 · 봉 미소비 (--commit으로 실행).
 ```
+
+**순위가 시장마다 1번부터 다시 시작합니다.** 랭킹·컷이 시장 안에서만 이뤄지기 때문입니다(규칙 17).
 
 **`--commit`이 없으면 판단이 남지 않습니다** — `signals` 미기록, 봉 미소비. 몇 번을 돌려도
 안전하므로 전략을 고치면서 마음껏 돌려 보세요.
@@ -150,8 +156,23 @@ nasdaq:MSFT  1d  2026-07-31T20:00:00+00:00  3     demo_momentum
 ### 4. 리포트를 본다
 
 `reports/`에 자기완결적인 HTML 한 장이 떨어집니다. CDN·폰트·스크립트를 참조하지 않으므로
-**반년 뒤에 열어도 그대로 보입니다.** 신호 표(순위·백분위·점수·전략 해시)와 노드별 실행 로그가
-들어 있고, `--limit`과 무관하게 **전체 신호**가 실립니다.
+**반년 뒤에 열어도 그대로 보입니다.** `--limit`과 무관하게 **전체 신호**가 실립니다.
+
+```
+종목         이름       종가 (등락)        시장  봉 마감 (KST)     순위  유니버스  백분위
+krx:005930   삼성전자   239,500 (+2.34%)   krx   2026-08-03 15:30  3     195      1.5385
+nasdaq:SNDK  Sandisk    1,249 (+2.78%)     us    2026-08-04 05:00  1     95       1.0526
+```
+
+| | |
+| :--- | :--- |
+| **정렬** | **점수가 아니라 백분위 순.** 점수는 시장마다 스케일이 달라 한 줄로 세우면 그 기간에 잘 간 시장이 위를 통째로 차지합니다 — 종목이 아니라 시장을 고른 표가 됩니다 |
+| **색** | 등락률에만. **상승 빨강 · 하락 파랑** (국내 HTS 관례) |
+| **시각** | 모두 KST. 저장은 UTC이고 표시할 때만 변환합니다(§4.4) |
+| **자릿수** | 크기에서 유도합니다 — `1,181,000` · `521.57` · `0.00000123` |
+
+> ⚠️ **미국 종목은 날짜가 하루 뒤로 보입니다.** 8/3 세션이 KST로는 다음 날 새벽
+> 05:00에 닫히기 때문입니다. 값은 정확하고, 리포트에도 같은 주석이 달려 있습니다.
 
 | | 파일 |
 | :--- | :--- |
@@ -177,16 +198,22 @@ marketscan explain 1
 ```
 
 ```
-krx:000660 · 2026-07-31T06:30:00+00:00 (1d)
-전략  demo_momentum @ c828301f3f71
-순위  1 / 6  (상위 16.6667%)
-데이터 synthetic · adjusted=True · fallback_from=[]
-실행  run_d91342e5fe47 · success
+upbit:KRW-USDT (테더) · 봉 마감 2026-08-03 09:00 (KST) · 1d
+종가  1,431 (-0.76%)
+전략  cross_momentum_12_1 @ c2ced90f5da5
+순위  1 / 39 (crypto)  (상위 2.5641%)  — 360종목을 훑어 321종목은 봉 부족으로 제외
+데이터 cache(ccxt.upbit) · adjusted=False · fallback_from=[]
+실행  run_875ba1e0bee8 · success
 판정  acted=None
 ```
 
-`전략 @ 해시`와 `fallback_from`이 함께 나오는 것이 핵심입니다 —
-**어떤 코드로, 어느 소스에서 나온 판단인지**가 사후에 복원됩니다(§4.7 / §3.4).
+세 가지가 함께 나오는 것이 핵심입니다.
+
+- **`전략 @ 해시`** — 어떤 코드로 나온 판단인가 (§4.7)
+- **`데이터 cache(원래소스)` · `fallback_from`** — 어느 소스에서 나왔는가 (§3.4).
+  캐시에서 읽었어도 **그 구간을 채운 원래 소스**를 밝힙니다
+- **`순위 1 / 39 (crypto)`** — 무엇과 비교한 순위인가. 시장을 밝히지 않으면
+  39가 무엇의 39인지 알 수 없습니다 (규칙 17)
 
 ### 7. 전략을 쓴다
 
@@ -232,7 +259,8 @@ leaky — 위반 1건
 
 ### 8. 파이프라인을 고친다
 
-`pipelines/demo.yaml`이 기본값입니다. `MARKETSCAN_PIPELINE_PATH`로 바꾸거나 `-p`로 지정합니다.
+`pipelines/trend.yaml`(추세추종)이 기본값입니다. 12-1 횡단면 모멘텀은 `pipelines/demo.yaml`에
+그대로 있고 `-p pipelines/demo.yaml`로 부릅니다. `MARKETSCAN_PIPELINE_PATH`로도 바꿉니다.
 노드는 **배선**입니다 — 지표 조건은 노드가 아니라 전략 클래스 안에 넣습니다(§5).
 
 ```
@@ -380,6 +408,11 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로 `--marke
 
 ## 할 일
 
+> **다음 작업은 Phase 3의 `3a. 데이터`부터입니다.** Phase 1·2는 끝났습니다.
+> 3a → 3b(`review`) → 3c(`serve`) 순서는 앞이 안 서면 뒤가 못 서기 때문입니다 —
+> 사후 수익률이 없으면 리뷰 화면에 그릴 것이 없고, `bar_time → 세션 날짜` 변환기가
+> 없으면 마커가 제 봉 위에 앉지 않습니다.
+
 ### Phase 0.5 — v0.5 전환 ✅ 완료
 
 - [x] 프로젝트 개명 `tradeflow` → `marketscan` (환경변수 접두사 `MARKETSCAN_` 포함)
@@ -510,8 +543,8 @@ Phase 2에서 채워졌습니다.
 - [ ] **`marketscan review`** — 기간·전략·시장으로 걸러 신호 이력 + 이후 주가 경로를
       정적 HTML로. 신호 시점에 마커 (§12.7)
 - [ ] 차트를 신호의 `meta["adjusted"]`와 **같은 키로** 조회 — 다르면 마커가 엉뚱한 가격에 뜹니다
-- [ ] 종목별 `priceFormat` — KRW 주식은 정수 원, 코인은 소수점 8자리. 기본값이면 코인이
-      전부 `0.00`으로 찌그러집니다
+- [ ] 종목별 `priceFormat` — 규칙은 이미 `app/core/formatting.format_price`에 있습니다
+      (크기에서 자릿수를 유도). 차트 옵션으로 옮기기만 하면 됩니다
 - [ ] `stats`의 forward return · hit rate · IC (§4.8 신호 품질 지표)
 
 **3c. `serve` — 상주 실행**
@@ -577,7 +610,7 @@ LLM에게 한국어 표를 파싱하게 두면 오독하기 때문입니다(§12
 
 | 변수 | 기본값 |
 | :--- | :--- |
-| `MARKETSCAN_PIPELINE_PATH` | `pipelines/demo.yaml` |
+| `MARKETSCAN_PIPELINE_PATH` | `pipelines/trend.yaml` |
 | `MARKETSCAN_STRATEGIES_DIR` | `strategies` |
 | `MARKETSCAN_DATABASE_URL` | `sqlite+aiosqlite:///./data/marketscan.db` |
 
@@ -602,7 +635,9 @@ uv run ruff check app tests
 marketscan/
 ├── ARCHITECTURE.md            설계 문서 (단일 출처)
 ├── CLAUDE.md                  작업 규칙
-├── pipelines/demo.yaml        파이프라인 정의 (YAML 확정 — §6 스키마 그대로)
+├── pipelines/                 파이프라인 정의 (YAML 확정 — §6 스키마 그대로)
+│   ├── trend.yaml             ★ 기본값 — 추세추종 55일 돌파
+│   └── demo.yaml              12-1 횡단면 모멘텀
 ├── strategies/                ★ 사용자 전략 — 파일 하나 = 전략 하나. 해시가 실행에 박힌다
 ├── data/                      SQLite (백업 대상 · --commit 실행에서만 생성)
 └── app/
@@ -610,11 +645,12 @@ marketscan/
     ├── engine/                Bundle·Item 계약, RunContext, DAG 검증·실행, 신호 배출구
     ├── strategies/            Strategy 프로토콜 · 로더(SHA-256) · AST 인과성 검사
     ├── market/                InstrumentRef, MarketCalendar, 타임프레임 정책
-    ├── providers/             시세 소스 플러그인 + 라우팅·폴백 · 캐시 계층(ohlcv_source)
+    ├── providers/             시세 소스 + 라우팅·폴백 · 캐시 계층(ohlcv_source · universe_source)
     ├── ingest/                Ingestion Worker — 수집 대상 도출·수집 (§3.9)
     ├── nodes/                 배선용 노드 (트리거·입력·전략·로직·액션)
     ├── report/                자기완결 HTML — run_report · review_report(P3) · vendor/
-    └── storage/               SQLAlchemy 모델 · 실행 이력 · 신호 · ohlcv_cache
+    ├── core/                  config · formatting(가격·시각 표기의 단일 출처)
+    └── storage/               SQLAlchemy 모델 · 실행 이력 · 신호 · ohlcv_cache · instruments
 ```
 
 ---
