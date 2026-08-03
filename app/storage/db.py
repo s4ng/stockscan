@@ -48,7 +48,24 @@ def _set_sqlite_pragmas(dbapi_connection: object, _record: object) -> None:
 
 
 def database_url() -> str:
-    return _url or get_settings().database_url
+    """실제로 열 DB URL. **SQLite 상대 경로는 프로젝트 루트 기준으로 편다.**
+
+    ⚠️ 편지 않으면 경로가 **현재 디렉터리**를 따라간다. `cd data && marketscan run`이
+    `data/data/marketscan.db`를 새로 만들고, 사용자는 캐시와 신호가 통째로 비어 있는
+    것을 보게 된다 — 파일이 두 개 생겼다는 사실 자체가 잘 안 보이므로 진단이 어렵다.
+    `config.py`가 "어느 디렉터리에서 CLI를 부르든 같은 파일을 보아야 한다"고 정한
+    것을 여기서 지킨다 (다른 경로들은 `settings.resolve()`가 이미 하고 있다).
+    """
+    return _resolve_sqlite(_url or get_settings().database_url)
+
+
+def _resolve_sqlite(url: str) -> str:
+    if not url.startswith("sqlite"):
+        return url
+    prefix, sep, raw = url.partition("///")
+    if not sep or not raw or raw == ":memory:" or Path(raw).is_absolute():
+        return url
+    return f"{prefix}///{get_settings().resolve(raw).as_posix()}"
 
 
 def configure(url: str) -> None:

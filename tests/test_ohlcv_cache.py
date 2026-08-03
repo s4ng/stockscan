@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -192,10 +193,21 @@ async def test_failures_accumulate_and_success_resets(maker):
 
 
 # -------------------------------------------------------------- OhlcvSource 정책
+class CacheableSynthetic(SyntheticProvider):
+    """실제 소스인 척하는 synthetic. 캐시 **쓰기** 경로를 검증하기 위한 것이다.
+
+    진짜 `SyntheticProvider`는 `cacheable=False`라 캐시에 들어가지 않는다 —
+    합성 봉이 영구 자산에 섞이면 이후 실제 실행이 가짜 시세로 돌기 때문이다.
+    """
+
+    id = "cacheable_synthetic"
+    capabilities = replace(SyntheticProvider.capabilities, cacheable=True)
+
+
 def registry() -> ProviderRegistry:
     reg = ProviderRegistry()
-    reg.register(SyntheticProvider())
-    reg.set_route("upbit", "*", ["synthetic"])
+    reg.register(CacheableSynthetic())
+    reg.set_route("upbit", "*", ["cacheable_synthetic"])
     return reg
 
 
@@ -248,11 +260,11 @@ async def test_shallow_cache_falls_through_to_the_source(maker):
         BTC, "1d", START + timedelta(days=29), 30
     )
     assert result.from_cache is False
-    assert result.provider_id == "synthetic"
+    assert result.provider_id == "cacheable_synthetic"
 
 
-async def test_dry_run_does_not_write_to_the_cache(maker):
-    """규칙 11 — 부작용은 `--commit`에서만."""
+async def test_writable_flag_controls_the_cache_write(maker):
+    """`writable=False`는 읽기만 한다 — 백테스트 리플레이가 캐시를 덮지 않게."""
     end = START + timedelta(days=29)
     await CachedSource(registry(), maker, writable=False).load(BTC, "1d", end, 30)
     async with maker() as session:
@@ -261,6 +273,26 @@ async def test_dry_run_does_not_write_to_the_cache(maker):
     await CachedSource(registry(), maker, writable=True).load(BTC, "1d", end, 30)
     async with maker() as session:
         assert (await ohlcv_cache.coverage(session, BTC, "1d", adjusted=True)).bars > 0
+
+
+async def test_uncacheable_sources_never_reach_the_permanent_cache(maker):
+    """★ 캐시는 소스를 구분해 **읽지** 않는다. 한 번 섞인 합성 봉은 되돌릴 수 없다.
+
+    캐시에 삭제 경로가 없으므로(규칙 16) 쓰기 단계에서 막는 것이 유일한 방어선이다.
+    dry-run도 캐시에 쓰게 되면서 이 경로가 실제로 밟히기 쉬워졌다.
+    """
+    reg = ProviderRegistry()
+    reg.register(SyntheticProvider())  # cacheable=False
+    reg.set_route("upbit", "*", ["synthetic"])
+
+    result = await CachedSource(reg, maker, writable=True).load(
+        BTC, "1d", START + timedelta(days=29), 30
+    )
+
+    assert not result.df.empty  # 봉은 정상적으로 받았고
+    async with maker() as session:
+        cov = await ohlcv_cache.coverage(session, BTC, "1d", adjusted=True)
+    assert cov.bars == 0  # 캐시에는 남지 않았다
 
 
 async def test_crypto_is_never_marked_adjusted():

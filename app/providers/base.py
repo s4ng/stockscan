@@ -46,6 +46,15 @@ class ProviderCapabilities:
     매번 같은 소스가 뽑히므로 "그날의 후보 집합이 달라진다"는 걱정이 생기지 않는다.
     """
 
+    cacheable: bool = True
+    """이 소스가 준 봉을 `ohlcv_cache`에 영구 보관해도 되는가.
+
+    ⚠️ **가짜 시세를 내는 소스는 False여야 한다.** 캐시는 소스를 구분해 읽지 않으므로
+    (`source_id`는 기록용이다) 한 번 섞여 들어간 합성 봉이 이후 실제 실행에 그대로
+    쓰인다. 캐시에 삭제 경로가 없어서(규칙 16) **되돌릴 방법도 없다.**
+    dry-run도 캐시에 쓰게 되면서 이 경로가 실제로 밟히기 쉬워졌다.
+    """
+
     rate_limit: RateLimitSpec = field(default_factory=RateLimitSpec)
 
 

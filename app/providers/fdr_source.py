@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -147,9 +148,12 @@ class FdrProvider(MarketDataProvider):
             except ValueError:
                 continue
             amount = getattr(row, "Amount", None) if has_amount else None
+            # 목록에 실린 이름을 버리지 않는다. `005930`보다 `삼성전자`가 읽히고,
+            # 이걸 여기서 흘리면 나중에 종목 하나당 조회를 한 번 더 해야 한다.
+            name = str(getattr(row, "Name", "") or "").strip()
             entries.append(
                 UniverseEntry(
-                    instrument=ref,
+                    instrument=replace(ref, display_name=name) if name else ref,
                     quote_volume_24h=float(amount)
                     if amount is not None and pd.notna(amount)
                     else None,

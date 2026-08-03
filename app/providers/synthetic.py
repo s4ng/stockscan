@@ -33,6 +33,8 @@ class SyntheticProvider(MarketDataProvider):
         timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"),
         adjusted="always",
         provides_universe=True,
+        # ⚠️ 합성 봉이다. 캐시에 섞이면 이후 실제 실행이 가짜 시세로 돈다.
+        cacheable=False,
         supports_orders=False,
     )
 

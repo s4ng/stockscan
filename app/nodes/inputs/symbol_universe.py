@@ -43,6 +43,13 @@ UNIVERSE_KEY = "universe"
 #: 유니버스 산출 근거. node_runs에 남아 "그날 왜 이 종목들이었나"를 되짚게 한다.
 UNIVERSE_META_KEY = "universe_meta"
 
+#: `venue:symbol` → 사람이 읽는 이름 (`krx:005930` → `삼성전자`).
+#:
+#: 유니버스는 문자열 목록으로 하류에 넘어가므로 `InstrumentRef.display_name`이
+#: 그 경계에서 사라진다. 이름을 다시 얻으려면 종목마다 목록을 재조회해야 하는데,
+#: 방금 받아 놓고 버린 값이라 그 호출이 통째로 낭비다. 그래서 함께 실어 보낸다.
+UNIVERSE_NAMES_KEY = "universe_names"
+
 class VenueQuery(BaseModel):
     """venue 하나를 어떻게 훑을 것인가.
 
@@ -199,6 +206,11 @@ class SymbolUniverseNode(BaseNode):
         context = {**inputs.get(MAIN, Bundle.empty()).context}
         context[UNIVERSE_KEY] = keys
         context[UNIVERSE_META_KEY] = meta
+        context[UNIVERSE_NAMES_KEY] = {
+            key: ref.display_name
+            for key, ref in merged.items()
+            if ref.display_name and ref.display_name != ref.symbol
+        }
         return {MAIN: Bundle(items=[], context=context)}
 
     # ------------------------------------------------------------------- 내부

@@ -171,7 +171,7 @@ class CachedSource:
                 f"{instrument.key}: 캐시 키의 adjusted 예측({expected})과 실제 소스"
                 f"({result.provider_id}, {actual})가 다릅니다."
             )
-        if self.writable:
+        if self.writable and self._cacheable(result.provider_id):
             notes.extend(await self._write(instrument, timeframe, result, actual))
 
         return LoadResult(
@@ -183,6 +183,13 @@ class CachedSource:
         )
 
     # ------------------------------------------------------------------- 내부
+    def _cacheable(self, provider_id: str) -> bool:
+        """가짜 시세를 영구 자산에 넣지 않는다. `ProviderCapabilities.cacheable` 참조."""
+        try:
+            return self.registry.get(provider_id).capabilities.cacheable
+        except Exception:  # noqa: BLE001 - 모르는 소스면 쓰지 않는 쪽이 안전하다
+            return False
+
     async def _read(
         self,
         instrument: InstrumentRef,

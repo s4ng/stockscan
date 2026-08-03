@@ -52,6 +52,7 @@ class SignalDraft:
             "node_id": self.node_id,
             "dedup_key": self.dedup_key,
             "instrument": self.instrument,
+            "display_name": self.meta.get("display_name"),
             "venue": self.venue,
             "timeframe": self.timeframe,
             "as_of": self.as_of.isoformat(),
@@ -105,6 +106,12 @@ def draft_from_item(
     strategy: dict[str, Any] | None = None,
 ) -> SignalDraft:
     """Item 하나를 신호로 옮긴다. OHLCV 원본은 옮기지 않는다 (12.4)."""
+    meta = dict(item.meta)
+    # `005930`보다 `삼성전자`가 읽힌다. 신호에 박아 두지 않으면 나중에 `explain`·
+    # `review`가 이름을 얻으려고 종목 목록을 다시 조회해야 한다.
+    if item.instrument.display_name and item.instrument.display_name != item.instrument.symbol:
+        meta["display_name"] = item.instrument.display_name
+
     return SignalDraft(
         run_id=run_id,
         pipeline_id=pipeline_id,
@@ -118,5 +125,5 @@ def draft_from_item(
         strategy_sha256=(strategy or {}).get("sha256"),
         features=dict(item.features),
         tags=dict(item.tags),
-        meta=dict(item.meta),
+        meta=meta,
     )

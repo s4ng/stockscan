@@ -9,6 +9,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import get_settings
 from app.schemas.pipeline import EdgeSpec, NodeSpec, PipelineSpec
 from app.storage import repository as repo
 from app.storage.models import Base, PipelineVersionRow
@@ -151,3 +152,35 @@ async def test_delete_removes_versions_too(session):
 
     assert await repo.list_pipelines(session) == []
     assert await repo.list_versions(session, pipeline_id) == []
+
+
+def test_sqlite_path_is_anchored_to_the_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """★ 상대 경로를 그대로 두면 DB가 **현재 디렉터리**를 따라간다.
+
+    `cd data && marketscan run`이 `data/data/marketscan.db`를 새로 만들고, 사용자는
+    캐시와 신호가 통째로 비어 있는 것을 본다. 파일이 두 개 생겼다는 사실 자체가
+    잘 안 보여서 진단이 어렵다.
+    """
+    from app.core.config import PROJECT_ROOT
+    from app.storage import db
+
+    db.configure("sqlite+aiosqlite:///./data/marketscan.db")
+    try:
+        monkeypatch.chdir(tmp_path)
+        resolved = db.database_url()
+    finally:
+        db.configure(get_settings().database_url)
+
+    assert resolved.endswith((PROJECT_ROOT / "data/marketscan.db").as_posix())
+    assert str(tmp_path.as_posix()) not in resolved
+
+
+def test_memory_and_absolute_urls_are_left_alone():
+    from app.storage import db
+
+    for url in ("sqlite+aiosqlite:///:memory:", "postgresql+asyncpg://h/db"):
+        db.configure(url)
+        try:
+            assert db.database_url() == url
+        finally:
+            db.configure(get_settings().database_url)

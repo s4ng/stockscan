@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -256,9 +257,10 @@ class CcxtProvider(MarketDataProvider):
             except ValueError:
                 continue  # venue 표기로 옮길 수 없는 종목은 유니버스에 넣지 않는다
             volume = (tickers.get(symbol) or {}).get("quoteVolume")
+            name = self._quirk.display_name(market)
             entries.append(
                 UniverseEntry(
-                    instrument=ref,
+                    instrument=replace(ref, display_name=name) if name else ref,
                     quote_volume_24h=float(volume) if volume is not None else None,
                 )
             )

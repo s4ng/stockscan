@@ -76,11 +76,16 @@ def payload(result) -> dict:
 
 
 # ------------------------------------------------------------------- 부작용 규약
-def test_dry_run_creates_no_database(workspace: Path):
-    """읽기·계산만 하는 실행이 파일을 남기면 규칙 11이 이미 깨진 것이다."""
+def test_dry_run_records_no_signals(workspace: Path):
+    """★ dry-run이 막는 것은 **되돌릴 수 없는 것** 셋이다 — 알림·`signals`·봉 소비.
+
+    봉을 캐시에 넣는 것은 그중 어느 것도 아니라서 dry-run도 쓴다(3.9). 그래서
+    DB 파일 자체는 생기고, 확인해야 할 것은 "파일이 없다"가 아니라 **"판단이
+    남지 않았다"**로 바뀐다.
+    """
     result = invoke("run", "--now", NOW)
     assert result.exit_code == 0
-    assert not (workspace / "test.db").exists()
+    assert payload(invoke("signals", "list", "--json"))["count"] == 0
 
 
 def test_commit_records_signals(workspace: Path):
@@ -145,12 +150,58 @@ def test_dry_run_reads_the_bar_gate_but_does_not_consume(workspace: Path):
     assert collected(committed) == 0  # dry-run이 새 봉을 소비하지 않았다
 
 
-def test_dry_run_before_any_commit_does_not_create_the_database(workspace: Path):
-    """봉 상태를 SQLite로 옮겼으므로 규칙 11을 다시 확인한다."""
-    body = payload(invoke("run", "--now", NOW, "--json"))
+def test_dry_run_does_not_consume_bars(workspace: Path):
+    """★ 봉 소비만은 dry-run이 절대 하면 안 된다 — 그 신호는 영영 사라진다 (3.5).
 
-    assert body["signal_count"] > 0
-    assert not (workspace / "test.db").exists()
+    캐시 쓰기가 dry-run에 열리면서 DB 파일은 생기지만, `bar_state`는 그대로여야 한다.
+    두 번을 돌려도 같은 봉을 계속 수집하는 것이 그 증거다.
+    """
+    first = payload(invoke("run", "--now", NOW, "--json"))
+    second = payload(invoke("run", "--now", NOW, "--json"))
+
+    def collected(body: dict) -> int:
+        return next(n["items"] for n in body["nodes"] if n["node_id"] == "data")
+
+    assert collected(first) == 3
+    assert collected(second) == 3  # 봉을 삼키지 않았다
+    assert payload(invoke("signals", "list", "--json"))["count"] == 0
+
+
+def test_dry_run_still_fills_the_cache(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """받아 놓고 버리면 무료 API를 두 번 두드린다 — 그 호출을 아끼는 것이 3.9다."""
+    import sqlite3
+    from dataclasses import replace as dc_replace
+
+    from app.providers.registry import ProviderRegistry
+    from app.providers.synthetic import SyntheticProvider
+
+    def cacheable_registry() -> ProviderRegistry:
+        # 진짜 synthetic은 `cacheable=False`라 캐시에 남지 않는다(그게 옳다).
+        # 여기서는 캐시 **쓰기 경로**를 보려는 것이므로 실제 소스를 흉내 낸다.
+        source = SyntheticProvider()
+        source.capabilities = dc_replace(SyntheticProvider.capabilities, cacheable=True)
+        registry = ProviderRegistry()
+        registry.register(source)
+        return registry
+
+    monkeypatch.setattr("app.engine.context.default_registry", cacheable_registry)
+
+    result = invoke("run", "--now", NOW)
+    assert result.exit_code == 0
+
+    conn = sqlite3.connect(workspace / "test.db")
+    try:
+        assert conn.execute("select count(*) from ohlcv_cache").fetchone()[0] > 0
+        # 판단은 남지 않았다 — 캐시 쓰기와 부작용은 별개다
+        assert conn.execute("select count(*) from signals").fetchone()[0] == 0
+        # `bar_state` 테이블은 생기지도 않는다. dry-run의 저장소가 readonly라
+        # DDL 자체를 돌리지 않기 때문이다 — 봉이 소비되지 않았다는 가장 강한 증거다.
+        tables = {r[0] for r in conn.execute("select name from sqlite_master where type='table'")}
+        assert "bar_state" not in tables
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------------------------- 종료 코드

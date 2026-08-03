@@ -135,8 +135,9 @@ async def _execute(
     now = _parse_now(out, now_raw)
 
     sink: Any = CollectingSink()
+    # 캐시 쓰기는 dry-run에서도 열려 있으므로(`_ohlcv_source`) 테이블을 먼저 만든다.
+    await db.init_db()
     if commit and resolved_mode is not ExecutionMode.BACKTEST:
-        await db.init_db()
         sink = SqlSignalSink(db.get_sessionmaker())
 
     ctx = RunContext.create(
@@ -187,18 +188,23 @@ async def _execute(
 def _ohlcv_source(providers: Any, spec: PipelineSpec, commit: bool) -> Any:
     """봉을 어디서 얻을지 고른다 (3.9).
 
-    **쓰기는 `--commit`에서만, 읽기는 언제나.** dry-run이 캐시를 채우면 "읽기 전용
-    실행은 DB 파일조차 만들지 않는다"(규칙 11 / 12.1)가 깨지고, 반대로 dry-run이
-    캐시를 읽지 않으면 `run`과 `run --commit`이 서로 다른 데이터를 보게 되어
-    dry-run이 실제 실행을 예측하지 못한다 — `_bar_state`와 같은 판단이다.
+    ★ **dry-run도 캐시에 쓴다.** 규칙 11이 막는 것은 **되돌릴 수 없는 것** 셋이다 —
+    알림 발송, `signals` 기록, 봉 소비. 봉을 캐시에 넣는 것은 그중 어느 것도 아니다:
+    판단이 아니라 **자료 축적**이고, 어차피 `ingest`가 쓸 것을 미리 쓰는 것뿐이다.
+    받아 놓고 버리면 무료 API를 두 번 두드리게 되는데, 그 호출을 아끼는 것이 3.9의
+    존재 이유다.
+
+    **`run`(dry-run)과 `explain`(읽기 전용)은 다르다.** 앞은 "부작용 없이 실행해
+    본다"이고 뒤는 "조회만 한다"다. 12.1의 "DB 파일조차 만들지 않는다"는 뒤쪽 명령의
+    규약이고, 그건 그대로다.
     """
     path = sqlite_path(db.database_url())
-    if path is None or (not commit and not path.exists()):
+    if path is None:
         return DirectSource(providers, default_adjusted=spec.settings.adjusted)
     return CachedSource(
         providers,
         db.get_sessionmaker(),
-        writable=commit,
+        writable=True,
         default_adjusted=spec.settings.adjusted,
     )
 
@@ -323,10 +329,19 @@ def _report_run(
         "",
     ]
     rows = [
-        [s["instrument"], s["timeframe"], s["as_of"], s["features"].get("rank"), s["strategy_id"]]
+        [
+            s["instrument"],
+            # `005930`만으로는 무슨 회사인지 알 수 없다. 소스가 준 이름을 쓴다.
+            s.get("display_name") or "",
+            s["timeframe"],
+            s["as_of"],
+            s["features"].get("rank_pool"),
+            s["features"].get("rank"),
+            s["strategy_id"],
+        ]
         for s in signals
     ]
-    signal_table = table(rows, ["종목", "봉", "as_of", "순위", "전략"])
+    signal_table = table(rows, ["종목", "이름", "봉", "as_of", "시장", "순위", "전략"])
     human.extend(signal_table or ["신호 0건 — 정상입니다 (빈 결과와 실패는 다릅니다)."])
 
     if written:
@@ -686,7 +701,8 @@ def explain(
 
     strategy = payload["strategy"]
     human = [
-        f"{payload['instrument']} · {payload['as_of']} ({payload['timeframe']})",
+        f"{payload['instrument']}{_name_suffix(payload)} · {payload['as_of']}"
+        f" ({payload['timeframe']})",
         f"전략  {strategy['id']} @ {(strategy['sha256'] or '')[:12]}",
         f"순위  {strategy['features'].get('rank')} / {strategy['features'].get('universe_size')}"
         f"{_rank_pool(strategy['features'])}"
@@ -698,6 +714,11 @@ def explain(
         f"판정  acted={payload['acted']}",
     ]
     out.emit(payload, human)
+
+
+def _name_suffix(payload: dict[str, Any]) -> str:
+    name = payload.get("display_name")
+    return f" ({name})" if name else ""
 
 
 def _rank_pool(features: dict[str, Any]) -> str:
@@ -740,6 +761,7 @@ async def _explain(out: Out, signal_id: int) -> dict[str, Any] | None:
         "ok": True,
         "signal_id": row.id,
         "instrument": row.instrument,
+        "display_name": meta.get("display_name"),
         "timeframe": row.timeframe,
         "as_of": row.as_of.isoformat(),
         "kind": row.kind,
@@ -960,6 +982,7 @@ def _signal_dict(row: Any) -> dict[str, Any]:
         "id": row.id,
         "run_id": row.run_id,
         "instrument": row.instrument,
+        "display_name": (row.meta or {}).get("display_name"),
         "venue": row.venue,
         "timeframe": row.timeframe,
         "as_of": row.as_of.isoformat(),

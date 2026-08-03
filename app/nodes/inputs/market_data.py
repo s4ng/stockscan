@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -21,7 +22,7 @@ from app.engine.types import Bundle, Item, validate_ohlcv
 from app.market.instrument import InstrumentRef
 from app.market.timeframe import normalize
 from app.nodes.base import BaseNode, NodeError
-from app.nodes.inputs.symbol_universe import UNIVERSE_KEY
+from app.nodes.inputs.symbol_universe import UNIVERSE_KEY, UNIVERSE_NAMES_KEY
 from app.nodes.registry import register
 from app.providers.ohlcv_source import CacheMissError
 from app.providers.registry import AUTO
@@ -79,8 +80,15 @@ class MarketDataNode(BaseNode):
         from_cache: list[str] = []
         missing: list[str] = []
 
+        # 상류가 실어 보낸 이름을 되살린다. 유니버스가 문자열 목록으로 넘어오면서
+        # `display_name`이 사라지는데, 다시 얻으려면 종목마다 목록을 재조회해야 한다.
+        names = upstream.context.get(UNIVERSE_NAMES_KEY)
+        names = names if isinstance(names, dict) else {}
+
         for raw in targets:
             instrument = InstrumentRef.parse(raw)
+            if names.get(instrument.key):
+                instrument = replace(instrument, display_name=str(names[instrument.key]))
             calendar = ctx.calendar_for(instrument)
 
             as_of = calendar.last_closed_bar(ctx.now, timeframe)

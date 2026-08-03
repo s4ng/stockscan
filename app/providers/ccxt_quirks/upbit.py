@@ -36,3 +36,13 @@ class UpbitQuirk(ExchangeQuirk):
 
     def to_venue_symbol(self, market: dict[str, object]) -> str:
         return str(market["id"])
+
+    def display_name(self, market: dict[str, object]) -> str:
+        """업비트는 `/v1/market/all`에 한글 이름을 실어 준다 (`비트코인`).
+
+        CCXT 통합 스키마에는 없고 원본 응답에만 있어서 여기서 꺼낸다.
+        """
+        info = market.get("info")
+        if not isinstance(info, dict):
+            return ""
+        return str(info.get("korean_name") or info.get("english_name") or "").strip()
