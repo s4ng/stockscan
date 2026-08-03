@@ -32,6 +32,12 @@ RANK_FEATURE = "rank"
 PERCENTILE_FEATURE = "percentile"
 UNIVERSE_SIZE_FEATURE = "universe_size"
 
+RANK_POOL_FEATURE = "rank_pool"
+"""어느 시장 안에서 매긴 순위인가 (규칙 17).
+
+이게 없으면 `explain`의 "순위 7 / 200"이 무엇의 200인지 알 수 없다.
+"""
+
 
 class StrategyError(RuntimeError):
     """전략 로딩·실행 중 발생한 오류."""
@@ -106,6 +112,23 @@ class Strategy(ABC):
 
 
 # --------------------------------------------------------------------------- 헬퍼
+def _by_market(bundle: Bundle) -> dict[str, list[Item]]:
+    """★ 시장별로 나눈다 (CLAUDE.md 규칙 17).
+
+    횡단면은 **비교 가능한 집단** 안에서만 성립한다. 코인의 12개월 모멘텀 분포는
+    대략 −60%~+300%인데 국내 대형주는 −30%~+60%라, 섞어 정렬하면 분산이 넓은
+    코인이 위를 쓸어간다 — **모멘텀이 아니라 변동성으로 줄 세운 것**이 된다.
+    `rank`·`percentile`도 함께 거짓말이 된다: "코인 섞인 360마리 중 7등"은
+    해석할 수 없는 문장이다.
+
+    키가 `venue`가 아니라 `market`인 것은 `nasdaq`과 `nyse`를 나눌 이유가 없어서다.
+    """
+    groups: dict[str, list[Item]] = {}
+    for item in bundle:
+        groups.setdefault(item.instrument.market, []).append(item)
+    return groups
+
+
 def rank_by(
     bundle: Bundle,
     feature: str | None,
@@ -113,24 +136,31 @@ def rank_by(
     *,
     descending: bool = True,
 ) -> Bundle:
-    """`feature` 기준으로 items를 정렬하고 rank·percentile·universe_size를 채운다.
+    """`feature` 기준으로 **시장별로** 정렬하고 rank·percentile·universe_size를 채운다.
 
     점수가 없거나 NaN인 item은 **제외하되 반드시 경고를 남긴다** — 조용히 사라지면
     "유니버스 전체를 훑었다"는 전제가 깨진 것을 아무도 모른다.
     """
-    universe_size = len(bundle)
     if feature is None:
         # 순위를 매기지 않더라도 표본 수는 남긴다. 횡단면 전략의 신뢰도가 여기서 나온다.
-        return bundle.map(lambda it: it.with_features(**{UNIVERSE_SIZE_FEATURE: universe_size}))
+        groups = _by_market(bundle)
+        return bundle.map(
+            lambda it: it.with_features(
+                **{
+                    UNIVERSE_SIZE_FEATURE: len(groups[it.instrument.market]),
+                    RANK_POOL_FEATURE: it.instrument.market,
+                }
+            )
+        )
 
-    scored: list[tuple[float, Item]] = []
+    scored: dict[str, list[tuple[float, Item]]] = {}
     missing: list[str] = []
     for item in bundle:
         value = item.features.get(feature)
         if not isinstance(value, int | float) or isinstance(value, bool) or math.isnan(value):
             missing.append(item.instrument.key)
             continue
-        scored.append((float(value), item))
+        scored.setdefault(item.instrument.market, []).append((float(value), item))
 
     if missing:
         ctx.log.warning(
@@ -139,36 +169,55 @@ def rank_by(
             f"봉이 부족했거나 compute가 값을 채우지 못했습니다."
         )
 
-    scored.sort(key=lambda pair: pair[0], reverse=descending)
-    ranked_size = len(scored)
     ranked: list[Item] = []
-    for position, (score, item) in enumerate(scored, start=1):
-        ranked.append(
-            item.with_features(
-                **{
-                    RANK_FEATURE: position,
-                    UNIVERSE_SIZE_FEATURE: ranked_size,
-                    PERCENTILE_FEATURE: round(position / ranked_size * 100, 4)
-                    if ranked_size
-                    else None,
-                    "score": score,
-                }
+    for market in sorted(scored):
+        pool = sorted(scored[market], key=lambda pair: pair[0], reverse=descending)
+        pool_size = len(pool)
+        if len(scored) > 1:
+            ctx.log.info(f"랭킹 풀 {market}: {pool_size}종목")
+        for position, (score, item) in enumerate(pool, start=1):
+            ranked.append(
+                item.with_features(
+                    **{
+                        RANK_FEATURE: position,
+                        UNIVERSE_SIZE_FEATURE: pool_size,
+                        # 어느 풀에서 매긴 순위인지가 남아야 explain이 정직하다.
+                        RANK_POOL_FEATURE: market,
+                        PERCENTILE_FEATURE: round(position / pool_size * 100, 4)
+                        if pool_size
+                        else None,
+                        "score": score,
+                    }
+                )
             )
-        )
     return bundle.replace_items(ranked)
 
 
 def top_n(bundle: Bundle, n: int, ctx: RunContext) -> Bundle:
-    """상위 n개만 남긴다. 이미 rank 순으로 정렬돼 있다고 가정한다."""
-    if len(bundle) <= n:
-        return bundle
-    ctx.log.info(f"상위 {n}개만 통과 ({len(bundle)}개 중 {len(bundle) - n}개 컷)")
-    return bundle.replace_items(bundle.items[:n])
+    """**시장마다** 상위 n개씩 남긴다. 이미 rank 순으로 정렬돼 있다고 가정한다.
+
+    컷도 시장별이어야 한다(규칙 17). 섞어 자르면 분산 넓은 시장이 자리를 다 가져가
+    나머지 시장이 통째로 사라진다 — 그 순간 "멀티마켓"은 이름만 남는다.
+    """
+    kept: list[Item] = []
+    for market, items in _by_market(bundle).items():
+        if len(items) > n:
+            ctx.log.info(f"{market}: 상위 {n}개만 통과 ({len(items)}개 중 {len(items) - n}개 컷)")
+        kept.extend(items[:n])
+    return bundle.replace_items(kept)
 
 
 def top_pct(bundle: Bundle, pct: float, ctx: RunContext) -> Bundle:
-    """상위 pct(0~1) 비율만 남긴다. 최소 1개는 남긴다."""
+    """**시장마다** 상위 pct(0~1) 비율씩 남긴다. 시장당 최소 1개는 남긴다."""
     if not 0 < pct <= 1:
         raise StrategyError(f"top_pct의 비율은 0 초과 1 이하여야 합니다 (받은 값: {pct})")
-    keep = max(1, math.floor(len(bundle) * pct))
-    return top_n(bundle, keep, ctx)
+    kept: list[Item] = []
+    for market, items in _by_market(bundle).items():
+        keep = max(1, math.floor(len(items) * pct))
+        if len(items) > keep:
+            ctx.log.info(
+                f"{market}: 상위 {pct:.0%}({keep}개)만 통과 "
+                f"({len(items)}개 중 {len(items) - keep}개 컷)"
+            )
+        kept.extend(items[:keep])
+    return bundle.replace_items(kept)

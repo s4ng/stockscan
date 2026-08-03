@@ -24,11 +24,13 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 from app.engine.context import RunContext
 from app.engine.types import Bundle
-from app.market.instrument import InstrumentRef
+from app.market.instrument import VENUES, InstrumentRef
 from app.nodes.base import BaseNode, NodeError
 from app.nodes.registry import register
 from app.providers.base import UniverseNotSupportedError
@@ -41,18 +43,37 @@ UNIVERSE_KEY = "universe"
 #: 유니버스 산출 근거. node_runs에 남아 "그날 왜 이 종목들이었나"를 되짚게 한다.
 UNIVERSE_META_KEY = "universe_meta"
 
-# ⚠️ TODO(Phase 2): `venue`를 목록으로 받는다 — 혼합 파이프라인의 선행 조건이다.
-#
-# 지금은 venue가 단수라 시장마다 노드가 하나씩 필요한데, 그렇게 만든 노드 셋을
-# marketData 하나에 물리면 **두 시장이 소리 없이 사라진다.** `Bundle.merge`가
-# context를 dict.update로 합치는데 세 노드가 모두 UNIVERSE_KEY를 쓰기 때문이다
-# (items는 제대로 합쳐지므로 겉보기에는 정상이다).
-#
-# 노드 하나가 여러 venue를 처리하면 덮어쓰기가 애초에 생기지 않는다. 유동성 컷은
-# **venue별로 따로** 걸어야 한다 — 시장을 섞어 한 번에 자르면 거래대금 단위가
-# 달라(원 vs 달러) 비교가 성립하지 않는다.
-#
-# 설계와 예시 YAML은 README의 Phase 2 항목을 본다.
+class VenueQuery(BaseModel):
+    """venue 하나를 어떻게 훑을 것인가.
+
+    **원소가 문자열이 아니라 조건 묶음인 이유**는 venue마다 필요한 컷이 다르기
+    때문이다 — 코인은 KRW 마켓 제한이 필요하고 주식은 아니며, 미국 목록에는
+    거래대금이 아예 없다. 조건을 노드 수준에 하나만 두면 어느 시장엔가 안 맞는다.
+    """
+
+    venue: str = Field(description="예: upbit, krx, nasdaq")
+    quote_currency: str | None = Field(
+        default=None, description="결제 통화로 마켓 제한. 예: KRW (업비트 원화 마켓만)"
+    )
+    top_by_turnover: int | None = Field(
+        default=None, ge=1, description="거래대금 상위 N개만. 소스가 거래대금을 줘야 합니다"
+    )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "목록 앞에서 N개만. 소스가 거래대금을 주지 않는 venue(미국)의 대안입니다. "
+            "⚠️ 소스가 정렬해 준 순서에 기댑니다."
+        ),
+    )
+    exclude: list[str] = Field(default_factory=list, description="제외할 종목")
+
+    def cut(self) -> str:
+        return (
+            f"거래대금 상위 {self.top_by_turnover}"
+            if self.top_by_turnover
+            else (f"목록 상위 {self.limit}" if self.limit else "전량")
+        )
 
 
 class SymbolUniverseParams(BaseModel):
@@ -60,23 +81,45 @@ class SymbolUniverseParams(BaseModel):
         default_factory=list,
         description="고정 목록. venue:symbol 형식. 동적 조회 결과에 더해집니다.",
     )
-    venue: str | None = Field(
-        default=None,
-        description="이 venue의 종목을 거래소에서 조회합니다. 예: upbit",
+    venues: list[VenueQuery] = Field(
+        default_factory=list,
+        description="훑을 venue들. venue마다 컷 조건을 따로 답니다.",
     )
-    quote_currency: str | None = Field(
-        default=None,
-        description="결제 통화로 마켓을 제한합니다. 예: KRW (업비트 원화 마켓만)",
-    )
-    top_by_turnover: int | None = Field(
-        default=None,
-        ge=1,
-        description="24시간 거래대금 상위 N개만 남깁니다. 유동성 컷.",
-    )
+
+    # --- 아래 넷은 단수 표기의 하위 호환. `venues` 원소 하나로 접힌다 -------------
+    venue: str | None = Field(default=None, description="(구) 단일 venue. venues로 접힙니다")
+    quote_currency: str | None = Field(default=None, description="(구) venue와 함께 씁니다")
+    top_by_turnover: int | None = Field(default=None, ge=1, description="(구) venue와 함께")
     exclude: list[str] = Field(
         default_factory=list, description="제외할 종목. venue:symbol 형식."
     )
+
     source: str = Field(default=AUTO, description="'auto'면 라우팅 표를 따름")
+
+    @model_validator(mode="after")
+    def _fold_singular(self) -> SymbolUniverseParams:
+        """단수 표기를 `venues` 원소 하나로 접는다.
+
+        기존 파이프라인 파일이 그대로 돌아야 한다 — 정의는 버전으로 보존되므로
+        (4.7) 과거 버전을 리플레이할 때 옛 표기를 읽지 못하면 이력이 끊긴다.
+        """
+        if self.venue is None:
+            return self
+        if self.venues:
+            raise ValueError("venue와 venues를 함께 쓸 수 없습니다. venues 하나로 적으세요.")
+        object.__setattr__(
+            self,
+            "venues",
+            [
+                VenueQuery(
+                    venue=self.venue,
+                    quote_currency=self.quote_currency,
+                    top_by_turnover=self.top_by_turnover,
+                    exclude=list(self.exclude),
+                )
+            ],
+        )
+        return self
 
 
 @register
@@ -96,7 +139,7 @@ class SymbolUniverseNode(BaseNode):
         params: SymbolUniverseParams,
         ctx: RunContext,
     ) -> dict[str, Bundle]:
-        dynamic = params.venue is not None
+        dynamic = bool(params.venues)
         if dynamic and ctx.is_backtest:
             # 모듈 docstring 참조. 조용히 고정 목록으로 물러서지 않는다 — 그러면
             # 백테스트가 사용자가 적지 않은 유니버스로 돌아간다.
@@ -107,13 +150,32 @@ class SymbolUniverseNode(BaseNode):
             )
 
         fixed = [InstrumentRef.parse(raw) for raw in params.instruments]
-        discovered, source_id = await self._discover(params, ctx) if dynamic else ([], None)
-
         excluded = {InstrumentRef.parse(raw).key for raw in params.exclude}
-        merged: dict[str, InstrumentRef] = {}
-        for ref in [*fixed, *discovered]:
-            if ref.key not in excluded:
-                merged.setdefault(ref.key, ref)
+        merged: dict[str, InstrumentRef] = {
+            ref.key: ref for ref in fixed if ref.key not in excluded
+        }
+
+        # venue를 **하나씩 따로** 훑는다. 유동성 컷을 시장 간에 섞으면 거래대금
+        # 단위가 달라(원 vs 달러) 비교 자체가 성립하지 않는다 (3.7).
+        per_venue: list[dict[str, Any]] = []
+        for query in params.venues:
+            refs, source_id = await self._discover(query, params.source, ctx)
+            added = 0
+            for ref in refs:
+                if ref.key not in excluded and ref.key not in merged:
+                    merged[ref.key] = ref
+                    added += 1
+            per_venue.append(
+                {
+                    "venue": query.venue,
+                    "market": VENUES[query.venue].market if query.venue in VENUES else None,
+                    "quote_currency": query.quote_currency,
+                    "cut": query.cut(),
+                    "count": added,
+                    "source": source_id,
+                }
+            )
+            ctx.log.info(f"{query.venue}: {added}종목 ({query.cut()}, 소스 {source_id})")
 
         if not merged:
             # 빈 유니버스는 실패가 아니라 정상 출력이다(4.1). 다만 조용하면 안 된다 —
@@ -124,16 +186,14 @@ class SymbolUniverseNode(BaseNode):
             )
 
         keys = list(merged)
-        ctx.log.info(f"유니버스 {len(keys)}종목 (고정 {len(fixed)} · 조회 {len(discovered)})")
+        discovered = sum(v["count"] for v in per_venue)
+        ctx.log.info(f"유니버스 {len(keys)}종목 (고정 {len(fixed)} · 조회 {discovered})")
 
         meta = {
             "size": len(keys),
             "fixed": len(fixed),
-            "discovered": len(discovered),
-            "venue": params.venue,
-            "quote_currency": params.quote_currency,
-            "top_by_turnover": params.top_by_turnover,
-            "source": source_id,
+            "discovered": discovered,
+            "venues": per_venue,
             "point_in_time": not dynamic,
         }
         context = {**inputs.get(MAIN, Bundle.empty()).context}
@@ -143,43 +203,78 @@ class SymbolUniverseNode(BaseNode):
 
     # ------------------------------------------------------------------- 내부
     async def _discover(
-        self, params: SymbolUniverseParams, ctx: RunContext
+        self, query: VenueQuery, source: str, ctx: RunContext
     ) -> tuple[list[InstrumentRef], str]:
-        venue = params.venue or ""
+        if query.top_by_turnover is not None and query.limit is not None:
+            raise NodeError(
+                f"{query.venue}: top_by_turnover와 limit을 함께 쓸 수 없습니다. "
+                f"거래대금을 주는 소스면 top_by_turnover를, 아니면 limit을 쓰세요."
+            )
         try:
-            entries, source_id = await ctx.providers.list_instruments(venue, source=params.source)
+            entries, source_id = await ctx.providers.list_instruments(
+                query.venue, source=source
+            )
         except (UniverseNotSupportedError, NoProviderError) as exc:
             raise NodeError(str(exc)) from exc
 
-        if params.quote_currency:
-            wanted = params.quote_currency.upper()
+        if query.quote_currency:
+            wanted = query.quote_currency.upper()
             entries = [e for e in entries if e.instrument.quote_currency == wanted]
 
-        if params.top_by_turnover is not None:
-            entries = self._top_by_turnover(entries, params.top_by_turnover, ctx)
+        if query.top_by_turnover is not None:
+            entries = self._top_by_turnover(entries, query, source_id, ctx)
+        elif query.limit is not None:
+            entries = self._head(entries, query, ctx)
 
         return [e.instrument for e in entries], source_id
 
     @staticmethod
-    def _top_by_turnover(entries: list, keep: int, ctx: RunContext) -> list:
+    def _top_by_turnover(
+        entries: list, query: VenueQuery, source_id: str, ctx: RunContext
+    ) -> list:
         """거래대금 상위 N개. **절삭은 반드시 로그로 남긴다** (조용한 절삭 금지)."""
+        keep = query.top_by_turnover or 0
+        priced = [e for e in entries if e.quote_volume_24h is not None]
+
+        if entries and not priced:
+            # ★ 전량이 거래대금 없음 = 소스가 아예 안 주는 것이다. 경고만 남기고
+            # 빈 목록을 돌려주면 **그 시장이 통째로 사라진 채 실행이 성공**한다.
+            raise NodeError(
+                f"{query.venue}: 소스 {source_id}가 거래대금을 주지 않아 "
+                f"top_by_turnover를 걸 수 없습니다({len(entries)}종목 전량 탈락). "
+                f"이 venue에는 limit을 쓰거나 instruments를 직접 적으세요."
+            )
+
         missing = [e.instrument.key for e in entries if e.quote_volume_24h is None]
         if missing:
             # 거래대금이 없는 종목을 0으로 취급하면 목록 맨 뒤로 밀려 조용히
             # 사라진다. "거래가 없었다"와 "소스가 값을 안 줬다"는 다르다.
             ctx.log.warning(
-                f"24시간 거래대금을 받지 못해 유동성 컷에서 제외: "
-                f"{', '.join(missing[:20])}"
-                f"{f' 외 {len(missing) - 20}건' if len(missing) > 20 else ''}"
+                f"{query.venue}: 거래대금을 받지 못해 유동성 컷에서 제외 {len(missing)}종목 — "
+                f"{', '.join(missing[:10])}{' …' if len(missing) > 10 else ''}"
             )
-        ranked = sorted(
-            (e for e in entries if e.quote_volume_24h is not None),
-            key=lambda e: e.quote_volume_24h,
-            reverse=True,
-        )
+
+        ranked = sorted(priced, key=lambda e: e.quote_volume_24h, reverse=True)
         if len(ranked) > keep:
             ctx.log.info(
-                f"거래대금 상위 {keep}종목만 통과 ({len(ranked)}종목 중 "
-                f"{len(ranked) - keep}종목 컷)"
+                f"{query.venue}: 거래대금 상위 {keep}종목만 통과 "
+                f"({len(ranked)}종목 중 {len(ranked) - keep}종목 컷)"
             )
         return ranked[:keep]
+
+    @staticmethod
+    def _head(entries: list, query: VenueQuery, ctx: RunContext) -> list:
+        """목록 앞에서 N개. 거래대금을 주지 않는 venue의 대안이다.
+
+        ⚠️ **소스가 정렬해 준 순서에 기댄다.** FDR의 미국 목록은 시총 순으로
+        보이지만 문서화된 계약이 아니므로, 순서가 바뀌면 유니버스가 조용히
+        달라진다. 거래대금을 주는 소스가 생기면 그쪽으로 옮긴다.
+        """
+        keep = query.limit or 0
+        if len(entries) > keep:
+            ctx.log.warning(
+                f"{query.venue}: 목록 앞 {keep}종목만 통과 "
+                f"({len(entries)}종목 중 {len(entries) - keep}종목 컷). "
+                f"거래대금 컷이 아니라 **소스가 준 순서**에 기댄 절삭입니다."
+            )
+        return entries[:keep]

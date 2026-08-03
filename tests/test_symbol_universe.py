@@ -42,7 +42,7 @@ class FakeUniverseProvider(MarketDataProvider):
     display_name = "가짜"
     venues = ("upbit",)
     credential_schema = None
-    capabilities = ProviderCapabilities(timeframes=("1d",))
+    capabilities = ProviderCapabilities(timeframes=("1d",), provides_universe=True)
 
     #: (심볼, 거래대금). None은 소스가 값을 주지 않은 경우다.
     LISTING = [
@@ -109,7 +109,12 @@ async def test_dynamic_universe_lists_the_exchange():
     bundle = await run_node({"venue": "upbit"}, make_ctx())
 
     assert "upbit:KRW-BTC" in bundle.context[UNIVERSE_KEY]
-    assert bundle.context[UNIVERSE_META_KEY]["source"] == "fake"
+    meta = bundle.context[UNIVERSE_META_KEY]
+    # 산출 근거는 venue별로 남는다 — 시장을 섞어 훑을 때 어느 소스가 어느
+    # 시장을 채웠는지가 보여야 한다.
+    assert meta["venues"][0]["source"] == "fake"
+    assert meta["venues"][0]["venue"] == "upbit"
+    assert meta["venues"][0]["market"] == "crypto"
     assert bundle.context[UNIVERSE_META_KEY]["point_in_time"] is False
 
 
@@ -243,3 +248,103 @@ async def test_market_data_without_any_universe_says_what_to_do():
     data = result.node("data")
     assert data.status is NodeStatus.ERROR
     assert "symbolUniverse" in data.error
+
+
+# ------------------------------------------------------- venue 목록 (혼합 파이프라인)
+class FakeEquityProvider(MarketDataProvider):
+    """거래대금을 주지 않는 소스. FDR의 미국 목록이 정확히 이 모양이다."""
+
+    id = "fake_equity"
+    display_name = "가짜 주식"
+    venues = ("krx", "nasdaq")
+    credential_schema = None
+    capabilities = ProviderCapabilities(timeframes=("1d",), provides_universe=True)
+
+    #: krx만 거래대금이 있다. nasdaq은 None — 소스가 주지 않는 것이다.
+    LISTING = {
+        "krx": [("005930", 900.0), ("000660", 500.0), ("035720", 100.0)],
+        "nasdaq": [("AAPL", None), ("MSFT", None), ("NVDA", None)],
+    }
+
+    async def fetch_ohlcv(self, instrument, timeframe, end, limit):  # pragma: no cover
+        raise NotImplementedError
+
+    async def list_instruments(self, venue: str) -> list[UniverseEntry]:
+        return [
+            UniverseEntry(InstrumentRef.parse(f"{venue}:{symbol}"), volume)
+            for symbol, volume in self.LISTING[venue]
+        ]
+
+
+def mixed_ctx() -> RunContext:
+    registry = ProviderRegistry()
+    registry.register(FakeUniverseProvider())
+    registry.register(FakeEquityProvider())
+    registry.set_route("upbit", "*", ["fake"])
+    for venue in ("krx", "nasdaq"):
+        registry.set_route(venue, "*", ["fake_equity"])
+    return RunContext.create(now=NOW, providers=registry, pipeline_id="pipe_t").bind("universe")
+
+
+async def test_one_node_scans_several_markets():
+    """★ 노드가 하나라 `context["universe"]` 덮어쓰기가 애초에 생기지 않는다 (§4.1)."""
+    bundle = await run_node(
+        {
+            "venues": [
+                {"venue": "upbit", "quote_currency": "KRW", "top_by_turnover": 2},
+                {"venue": "krx", "top_by_turnover": 2},
+                {"venue": "nasdaq", "limit": 2},
+            ]
+        },
+        mixed_ctx(),
+    )
+
+    keys = bundle.context[UNIVERSE_KEY]
+    assert {k.split(":")[0] for k in keys} == {"upbit", "krx", "nasdaq"}
+    # 컷이 venue마다 따로 걸렸다 — 섞어 잘랐다면 거래대금이 큰 쪽이 자리를 다 가져간다
+    assert len([k for k in keys if k.startswith("upbit:")]) == 2
+    assert len([k for k in keys if k.startswith("krx:")]) == 2
+    assert len([k for k in keys if k.startswith("nasdaq:")]) == 2
+
+
+async def test_meta_records_each_venue_separately():
+    bundle = await run_node(
+        {"venues": [{"venue": "krx", "top_by_turnover": 2}, {"venue": "nasdaq", "limit": 1}]},
+        mixed_ctx(),
+    )
+
+    venues = bundle.context[UNIVERSE_META_KEY]["venues"]
+    assert [v["venue"] for v in venues] == ["krx", "nasdaq"]
+    assert [v["market"] for v in venues] == ["krx", "us"]
+    assert [v["count"] for v in venues] == [2, 1]
+
+
+async def test_turnover_cut_on_a_source_without_turnover_is_refused():
+    """★ 경고만 남기고 빈 목록을 돌려주면 **그 시장이 통째로 사라진 채 실행이 성공한다.**"""
+    with pytest.raises(NodeError, match="거래대금"):
+        await run_node({"venues": [{"venue": "nasdaq", "top_by_turnover": 2}]}, mixed_ctx())
+
+
+async def test_turnover_and_limit_together_is_refused():
+    with pytest.raises(NodeError, match="함께"):
+        await run_node(
+            {"venues": [{"venue": "krx", "top_by_turnover": 2, "limit": 2}]}, mixed_ctx()
+        )
+
+
+async def test_singular_venue_still_works():
+    """정의는 버전으로 보존되므로(4.7) 옛 표기를 못 읽으면 과거 실행의 이력이 끊긴다."""
+    bundle = await run_node(
+        {"venue": "upbit", "quote_currency": "KRW", "top_by_turnover": 2}, make_ctx()
+    )
+
+    keys = bundle.context[UNIVERSE_KEY]
+    assert keys == ["upbit:KRW-BTC", "upbit:KRW-ETH"]
+    assert bundle.context[UNIVERSE_META_KEY]["venues"][0]["venue"] == "upbit"
+
+
+async def test_venue_and_venues_together_is_refused():
+    with pytest.raises(ValueError, match="함께"):
+        SymbolUniverseParams.model_validate(
+            {"venue": "upbit", "venues": [{"venue": "krx"}]}
+        )

@@ -139,14 +139,68 @@ def test_rank_writes_rank_and_percentile(ctx: RunContext):
         [
             make_item("upbit:KRW-BTC", 100).with_features(score=0.3),
             make_item("upbit:KRW-ETH", 100).with_features(score=0.9),
-            make_item("krx:005930", 100).with_features(score=0.1),
         ]
     )
     ranked = rank_by(bundle, "score", ctx)
 
-    assert [i.instrument.symbol for i in ranked] == ["KRW-ETH", "KRW-BTC", "005930"]
-    assert [i.features["rank"] for i in ranked] == [1, 2, 3]
-    assert all(i.features["universe_size"] == 3 for i in ranked)
+    assert [i.instrument.symbol for i in ranked] == ["KRW-ETH", "KRW-BTC"]
+    assert [i.features["rank"] for i in ranked] == [1, 2]
+    assert all(i.features["universe_size"] == 2 for i in ranked)
+    assert all(i.features["rank_pool"] == "crypto" for i in ranked)
+
+
+# --------------------------------------------------------------- 규칙 17 (시장별)
+def test_rank_pools_are_split_by_market(ctx: RunContext):
+    """★ 코인과 주식을 한 줄로 세우면 **모멘텀이 아니라 변동성으로** 줄 세운 것이 된다.
+
+    코인의 12개월 모멘텀 분포가 주식보다 몇 배 넓어서, 섞으면 코인이 위를 쓸어간다.
+    분모(`universe_size`)도 시장 안에서 세어야 "krx 200 중 7등"이 해석 가능해진다.
+    """
+    bundle = Bundle(
+        [
+            make_item("upbit:KRW-BTC", 100).with_features(score=3.0),  # 코인은 스케일이 크다
+            make_item("upbit:KRW-ETH", 100).with_features(score=2.0),
+            make_item("krx:005930", 100).with_features(score=0.4),
+            make_item("krx:000660", 100).with_features(score=0.1),
+            make_item("nasdaq:AAPL", 100).with_features(score=0.3),
+        ]
+    )
+    ranked = rank_by(bundle, "score", ctx)
+    by_key = {i.instrument.key: i.features for i in ranked}
+
+    # 국내 1등이 코인에 밀려 4등이 되지 않는다
+    assert by_key["krx:005930"]["rank"] == 1
+    assert by_key["krx:005930"]["universe_size"] == 2
+    assert by_key["krx:005930"]["rank_pool"] == "krx"
+    assert by_key["upbit:KRW-BTC"]["rank"] == 1
+    assert by_key["nasdaq:AAPL"]["rank_pool"] == "us"  # nasdaq·nyse는 한 풀이다
+
+
+def test_cuts_are_taken_per_market(ctx: RunContext):
+    """컷도 시장별이어야 한다. 섞어 자르면 나머지 시장이 통째로 사라진다."""
+    bundle = Bundle(
+        [
+            make_item("upbit:KRW-BTC", 100).with_features(score=3.0),
+            make_item("upbit:KRW-ETH", 100).with_features(score=2.0),
+            make_item("krx:005930", 100).with_features(score=0.4),
+            make_item("krx:000660", 100).with_features(score=0.1),
+        ]
+    )
+    kept = top_n(rank_by(bundle, "score", ctx), 1, ctx)
+
+    assert {i.instrument.key for i in kept} == {"upbit:KRW-BTC", "krx:005930"}
+
+
+def test_top_pct_keeps_every_market(ctx: RunContext):
+    bundle = Bundle(
+        [make_item(f"upbit:KRW-C{i}", 100).with_features(score=float(i)) for i in range(10)]
+        + [make_item("krx:005930", 100).with_features(score=0.4)]
+    )
+    kept = top_pct(rank_by(bundle, "score", ctx), 0.2, ctx)
+
+    markets = [i.instrument.market for i in kept]
+    assert markets.count("crypto") == 2  # 10종목의 20%
+    assert markets.count("krx") == 1  # 1종목이라도 최소 1개는 남는다
 
 
 def test_rank_ascending_for_low_is_good_factors(ctx: RunContext):

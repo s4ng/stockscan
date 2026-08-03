@@ -689,6 +689,7 @@ def explain(
         f"{payload['instrument']} · {payload['as_of']} ({payload['timeframe']})",
         f"전략  {strategy['id']} @ {(strategy['sha256'] or '')[:12]}",
         f"순위  {strategy['features'].get('rank')} / {strategy['features'].get('universe_size')}"
+        f"{_rank_pool(strategy['features'])}"
         f"  (상위 {strategy['features'].get('percentile')}%)"
         f"{_excluded_note(strategy['features'])}",
         f"데이터 {_data_origin(payload['data'])} · adjusted={payload['data']['adjusted']}"
@@ -697,6 +698,16 @@ def explain(
         f"판정  acted={payload['acted']}",
     ]
     out.emit(payload, human)
+
+
+def _rank_pool(features: dict[str, Any]) -> str:
+    """어느 시장 안에서 매긴 순위인가 (규칙 17).
+
+    이게 없으면 "7 / 200"의 200이 무엇의 200인지 알 수 없다. 혼합 유니버스에서는
+    시장마다 분모가 다르므로 반드시 함께 보여야 한다.
+    """
+    pool = features.get("rank_pool")
+    return f" ({pool})" if pool else ""
 
 
 def _excluded_note(features: dict[str, Any]) -> str:

@@ -105,6 +105,8 @@ class CcxtProvider(MarketDataProvider):
             timeframes=supported if probe.has.get("fetchOHLCV") else (),
             adjusted="never",  # 코인에는 액면분할·배당이 없다 (3.8)
             supports_orders=bool(probe.has.get("createOrder")),
+            # 마켓 목록은 CCXT가 항상 준다. 거래대금은 fetchTickers가 있어야 한다.
+            provides_universe=bool(probe.has.get("fetchMarkets", True)),
             rate_limit=RateLimitSpec(
                 requests_per_second=1000 / max(probe.rateLimit or 100, 1), burst=1
             ),

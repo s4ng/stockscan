@@ -103,20 +103,25 @@ class ProviderRegistry:
         if source != AUTO:
             provider = self.get(source)
         else:
-            candidates = [
-                p
-                for p in self._providers.values()
-                if venue in p.venues and timeframe in p.capabilities.timeframes
-            ]
             routed = self._routes.get((venue, timeframe)) or self._routes.get((venue, "*"))
-            if routed:
-                candidates = [self.get(pid) for pid in routed]
-            if not candidates:
+            candidates = (
+                [self.get(pid) for pid in routed]
+                if routed
+                else [p for p in self._providers.values() if venue in p.venues]
+            )
+            # ★ **목록 조회 능력으로 거른다.** 라우팅 표는 시세의 우선순위이고
+            # 목록은 별개 능력이다. 이 필터가 없으면 `krx: pykrx→fdr`에서 앞의
+            # pykrx가 목록을 못 준다는 이유로 유니버스가 통째로 실패한다 — fdr이
+            # 줄 수 있는데도. 능력으로 고르는 것은 폴백이 아니다(항상 같은 소스가
+            # 뽑히므로 "그날의 후보 집합이 달라진다"는 문제가 생기지 않는다).
+            usable = [p for p in candidates if p.capabilities.provides_universe]
+            if not usable:
                 raise NoProviderError(
-                    f"{venue}의 종목 목록을 줄 소스가 없습니다. "
+                    f"{venue}의 종목 목록을 줄 소스가 없습니다 "
+                    f"(후보: {', '.join(p.id for p in candidates) or '(없음)'}). "
                     f"Symbol Universe 노드에 instruments를 직접 적으세요."
                 )
-            provider = candidates[0]
+            provider = usable[0]
         return await provider.list_instruments(venue), provider.id
 
     async def fetch_ohlcv(

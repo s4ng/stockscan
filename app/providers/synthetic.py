@@ -32,6 +32,7 @@ class SyntheticProvider(MarketDataProvider):
     capabilities = ProviderCapabilities(
         timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"),
         adjusted="always",
+        provides_universe=True,
         supports_orders=False,
     )
 

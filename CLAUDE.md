@@ -22,9 +22,8 @@
 **`ARCHITECTURE.md`가 설계의 단일 출처다.** 구조를 바꾸는 작업 전에 반드시 읽고,
 설계를 바꿨다면 그 문서도 함께 갱신한다.
 
-**현재 Phase 2 진행 중 — 수집 계층(`ohlcv_cache` · Ingestion Worker)까지 완료.**
-남은 것은 `symbolUniverse`의 venue 목록화와 혼합 파이프라인 검증이고, 그다음이
-Phase 3(리뷰 & 상주 실행)이다. 목록은 `README.md`의 체크박스를 본다.
+**현재 Phase 1·2 완료 — 다음은 Phase 3(리뷰 & 상주 실행)이다.**
+목록은 `README.md`의 체크박스를 본다.
 
 | | v0.4 (걷어냄) | **v0.5 (현재 코드)** |
 | :--- | :--- | :--- |
@@ -35,9 +34,10 @@ Phase 3(리뷰 & 상주 실행)이다. 목록은 `README.md`의 체크박스를 
 | 정의 형식 | DAG JSON | **YAML** (§11-4 확정 — 스키마는 그대로) |
 | 자동 실행 | APScheduler | **`serve` 확정** (§11-4b) — ⚠️ 상주 프로세스라 하트비트 필수 |
 
-**시세 소스 4종은 전부 실물이다** (PyKRX · yfinance · FDR · CCXT). **다만
-`pipelines/demo.yaml`은 여전히 업비트만 스캔한다** — `symbolUniverse`의 `venue`가
-단수라서다. 소스가 붙었다고 파이프라인이 세 시장을 도는 것으로 착각하지 않는다.
+**시세 소스 4종은 전부 실물이고**(PyKRX · yfinance · FDR · CCXT), **`pipelines/demo.yaml`
+하나가 코인·한국·미국을 동시에 훑는다.** 유니버스 노드는 **하나**이고 `venues` 목록을
+받는다 — 시장마다 노드를 만들면 `Bundle.merge`가 `context["universe"]`를 덮어써
+두 시장이 소리 없이 사라진다.
 
 `frontend/` · `docker-compose.yml` · `Dockerfile` · `app/main.py` · `app/api/`는 이미 삭제됐다.
 **되살리지 않는다.**
@@ -220,5 +220,7 @@ uv run marketscan review --since 2026-01-01   # 신호 이력 + 차트 (Phase 3)
 | 폐지 종목 수집이 봉을 하나도 못 받음 | `end`가 오늘로 잡혔다. 폐지 종목은 **폐지 시점**을 end로 써야 한다 |
 | 혼합 유니버스인데 상위가 전부 코인 | 규칙 17을 어겼다. 시장을 섞어 한 풀에 정렬한 것 |
 | `ExchangeNotAvailable`인데 curl은 붙음 | DNS다. aiodns(c-ares)가 서버 목록을 못 읽은 것 — `ccxt_base._system_dns_session()` 참조 |
+| `종목 목록을 줄 소스가 없습니다` | 그 venue의 소스가 `provides_universe=False`다. 라우팅이 아니라 능력 문제 |
+| `거래대금을 주지 않아 top_by_turnover를 걸 수 없습니다` | 의도된 거부다. 미국 목록엔 거래대금이 없다 — `limit`을 쓴다 |
 | `review` 차트가 특정 시점에 멈춤 | 규칙 18을 어겼다. 그 종목이 유니버스에서 빠지며 수집이 끊겼다 |
 | `review`가 열리는데 차트만 안 보임 | 차트 라이브러리를 CDN으로 걸었다. vendoring해서 인라인한다 |

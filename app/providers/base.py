@@ -35,6 +35,17 @@ class ProviderCapabilities:
     adjusted: Literal["always", "optional", "never"] = "never"
     supports_orders: bool = False
     supports_fractional: bool = False
+
+    provides_universe: bool = False
+    """`list_instruments`를 실제로 구현하는가.
+
+    라우팅 표는 **시세**의 우선순위다. 목록 조회는 별개 능력이라, 이 값을 보지
+    않으면 `krx: pykrx→fdr`에서 pykrx가 목록을 못 준다는 이유로 유니버스 조회가
+    통째로 실패한다 — fdr이 줄 수 있는데도 그렇다. 능력으로 고르는 것은 폴백이
+    아니다: 실패해서 넘어가는 것이 아니라 애초에 못 하는 소스를 빼는 것이고,
+    매번 같은 소스가 뽑히므로 "그날의 후보 집합이 달라진다"는 걱정이 생기지 않는다.
+    """
+
     rate_limit: RateLimitSpec = field(default_factory=RateLimitSpec)
 
 

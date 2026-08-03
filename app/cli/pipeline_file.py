@@ -21,6 +21,7 @@ import yaml
 from pydantic import ValidationError
 
 from app.core.config import get_settings
+from app.market.instrument import markets, venues_of
 from app.schemas.pipeline import PipelineSpec
 
 #: 확장자 → 파서. YAML이 정본이고 JSON은 계속 읽는다 (스냅샷·기존 파일 호환).
@@ -32,11 +33,11 @@ _PARSERS = {
 
 #: `--market` 값 → 포함할 venue. Fresh Bar Gate(3.5)가 있어 없어도 되지만,
 #: 실행 로그를 읽기 편하게 하려고 시장별로 쪼갤 수 있게 둔다 (8장).
-MARKETS: dict[str, tuple[str, ...]] = {
-    "crypto": ("upbit", "binance"),
-    "krx": ("krx",),
-    "us": ("nasdaq", "nyse"),
-}
+#:
+#: **표를 손으로 두지 않고 `VENUES`에서 유도한다.** 같은 분류가 두 곳에 있으면
+#: venue를 추가한 날 한쪽만 고치게 되고, 그러면 `--market`이 조용히 종목을 빠뜨린다.
+#: 랭킹 풀(규칙 17)도 같은 어휘를 쓴다.
+MARKETS: dict[str, tuple[str, ...]] = {m: venues_of(m) for m in markets()}
 
 
 class PipelineFileError(ValueError):
@@ -85,9 +86,13 @@ def load(path: Path | None = None) -> PipelineSpec:
 
 
 def filter_by_market(spec: PipelineSpec, market: str) -> tuple[PipelineSpec, list[str]]:
-    """지정한 시장의 종목만 남긴 사본과 제외된 종목 목록을 돌려준다.
+    """지정한 시장의 종목만 남긴 사본과 제외된 것들의 목록을 돌려준다.
 
     원본 spec을 건드리지 않는다 — 저장된 버전 스냅샷은 불변이어야 한다 (4.7).
+
+    **고정 목록(`instruments`)과 동적 조회(`venues`)를 모두 걸러야 한다.** 동적
+    유니버스 쪽을 빠뜨리면 `--market krx`가 세 시장을 그대로 훑으면서 로그만
+    "krx"라고 적힌다 — 필터가 있다는 사실이 오히려 오해를 만든다.
     """
     venues = MARKETS.get(market)
     if venues is None:
@@ -99,16 +104,39 @@ def filter_by_market(spec: PipelineSpec, market: str) -> tuple[PipelineSpec, lis
     dropped: list[str] = []
     for node in clone.nodes:
         instruments = node.params.get("instruments")
-        if not isinstance(instruments, list):
-            continue
-        kept = [s for s in instruments if isinstance(s, str) and s.split(":", 1)[0] in venues]
-        dropped.extend(s for s in instruments if s not in kept)
-        node.params["instruments"] = kept
+        if isinstance(instruments, list):
+            kept = [s for s in instruments if isinstance(s, str) and s.split(":", 1)[0] in venues]
+            dropped.extend(s for s in instruments if s not in kept)
+            node.params["instruments"] = kept
+
+        queries = node.params.get("venues")
+        if isinstance(queries, list):
+            kept_q = [q for q in queries if _query_venue(q) in venues]
+            dropped.extend(
+                f"venues[{_query_venue(q)}]" for q in queries if _query_venue(q) not in venues
+            )
+            node.params["venues"] = kept_q
+
+        # 단수 표기도 같이 건다. 하위 호환이라 남아 있는 파일이 있다.
+        single = node.params.get("venue")
+        if isinstance(single, str) and single not in venues:
+            dropped.append(f"venue[{single}]")
+            node.params["venue"] = None
     return clone, dropped
 
 
+def _query_venue(query: object) -> str:
+    return str(query.get("venue", "")) if isinstance(query, dict) else ""
+
+
 def has_empty_universe(spec: PipelineSpec) -> bool:
-    """`--market` 필터로 종목이 하나도 남지 않았는가."""
+    """`--market` 필터로 훑을 것이 하나도 남지 않았는가.
+
+    동적 조회가 하나라도 남아 있으면 비어 있지 않다 — 파일에 종목이 0개로 적혀
+    있어도 실행 시점에 거래소가 채운다.
+    """
+    if any(node.params.get("venues") or node.params.get("venue") for node in spec.nodes):
+        return False
     lists = [
         node.params["instruments"]
         for node in spec.nodes
@@ -136,17 +164,29 @@ def universe_summary(spec: PipelineSpec) -> dict[str, object]:
     보인다.** 실제로는 실행 시점에 거래소가 정한다.
     """
     fixed = instruments(spec)
-    sources: list[dict[str, object]] = [
-        {
-            "node_id": node.id,
-            "venue": node.params.get("venue"),
-            "quote_currency": node.params.get("quote_currency"),
-            "top_by_turnover": node.params.get("top_by_turnover"),
-        }
-        for node in spec.nodes
-        if node.type == "symbolUniverse" and node.params.get("venue")
-    ]
+    sources: list[dict[str, object]] = []
+    for node in spec.nodes:
+        if node.type != "symbolUniverse":
+            continue
+        for query in _venue_queries(node.params):
+            sources.append({"node_id": node.id, **query})
     return {"fixed": fixed, "fixed_size": len(fixed), "dynamic": sources}
+
+
+def _venue_queries(params: dict[str, object]) -> list[dict[str, object]]:
+    """`venues` 목록과 단수 `venue` 표기를 같은 모양으로 돌려준다."""
+    queries = params.get("venues")
+    if isinstance(queries, list):
+        return [dict(q) for q in queries if isinstance(q, dict) and q.get("venue")]
+    if params.get("venue"):
+        return [
+            {
+                "venue": params.get("venue"),
+                "quote_currency": params.get("quote_currency"),
+                "top_by_turnover": params.get("top_by_turnover"),
+            }
+        ]
+    return []
 
 
 def describe_universe(summary: dict[str, object]) -> str:
@@ -160,6 +200,8 @@ def describe_universe(summary: dict[str, object]) -> str:
             detail += f"/{source['quote_currency']}"
         if source.get("top_by_turnover"):
             detail += f" 거래대금 상위 {source['top_by_turnover']}"
+        elif source.get("limit"):
+            detail += f" 목록 상위 {source['limit']}"
         parts.append(f"동적({detail})")
     return " + ".join(parts) or "미지정"
 

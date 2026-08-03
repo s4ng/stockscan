@@ -64,6 +64,7 @@ class FdrProvider(MarketDataProvider):
     capabilities = ProviderCapabilities(
         timeframes=("1d",),
         adjusted="always",
+        provides_universe=True,  # 종목 마스터 + 상장폐지 목록의 유일한 출처 (3.3)
         supports_orders=False,
         rate_limit=RateLimitSpec(requests_per_second=2.0, burst=5),
     )

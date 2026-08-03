@@ -38,18 +38,27 @@
 
 ## 현재 상태
 
-> **Phase 1 완료 · Phase 2 진행 중 (수집 계층까지 완료)**
+> **Phase 1·2 완료 — 세 시장이 하나의 파이프라인으로 돕니다**
 >
 > `marketscan run --commit`이 **업비트 실제 일봉**으로 끝까지 돕니다 — 거래소에서 유니버스를
 > 뽑고, 12-1 모멘텀으로 줄 세우고, 신호를 남기고, `explain`으로 되짚을 수 있습니다.
 > **시세 소스 4종(PyKRX · yfinance · FDR · CCXT)과 `ohlcv_cache` 수집 계층이 붙었습니다.**
 >
-> ⚠️ **`review`와 `serve`는 아직 없습니다** — Phase 3입니다. 지금 있는 것은 `run`뿐입니다.
+> **★ 세 시장을 한 번에 훑습니다.** `pipelines/demo.yaml` 하나로 코인·한국·미국이
+> 동시에 돕니다. 실측(2026-08-03 기준):
 >
-> **한국·미국 주식 소스는 실제로 동작합니다.** `marketData`의 `instruments`에 직접 적으면
-> 오늘 바로 됩니다. 다만 **거래소에 물어 유니버스를 자동으로 뽑는 것은 한 시장씩만** 됩니다 —
-> `symbolUniverse`의 `venue`가 단수라 시장을 늘리려면 노드를 늘려야 하는데, 그러면 조용히
-> 깨집니다(아래 Phase 2). 그래서 `pipelines/demo.yaml`은 아직 업비트만 스캔합니다.
+> ```
+> market     pool  signals   상위
+> crypto       39        7   upbit:KRW-USDT, KRW-NEAR, KRW-AKT
+> krx         195       39   krx:043260, krx:010170, krx:009150
+> us           95       19   nasdaq:SNDK, nasdaq:WDC, nasdaq:LITE
+> ```
+>
+> **순위가 시장마다 1번부터 다시 시작합니다** — 랭킹·컷이 시장 안에서만 이뤄지기
+> 때문입니다(규칙 17). 섞어 세면 분산이 넓은 코인이 위를 쓸어가 모멘텀이 아니라
+> 변동성으로 줄 세운 것이 됩니다.
+>
+> ⚠️ **`review`와 `serve`는 아직 없습니다** — Phase 3입니다.
 
 v0.5 전환이 끝났습니다. 아래가 v0.4에서 바뀐 것들입니다.
 
@@ -235,10 +244,15 @@ manualTrigger → symbolUniverse → marketData → strategyRunner → persistSi
 - id: universe
   type: symbolUniverse
   params:
-    venue: upbit
-    quote_currency: KRW      # 원화 마켓만
-    top_by_turnover: 30      # 24시간 거래대금 상위 30종목
+    venues:                                             # 시장마다 컷 조건이 다릅니다
+      - { venue: upbit, quote_currency: KRW, top_by_turnover: 60 }
+      - { venue: krx,   top_by_turnover: 200 }
+      - { venue: nasdaq, limit: 100 }                   # 미국 목록엔 거래대금이 없습니다
 ```
+
+**노드는 하나로 둡니다.** 시장마다 노드를 만들면 `Bundle.merge`가
+`context["universe"]`를 덮어써 두 시장이 소리 없이 사라집니다 — 자세한 것은 아래
+[Phase 2 절](#세-시장을-어떻게-한-번에-훑는가)에 있습니다.
 
 > ⚠️ **동적 유니버스는 backtest 모드에서 거부됩니다.** 거래소 목록은 언제나 "지금"이라,
 > 과거를 리플레이하면 **전략 코드가 완전히 인과적인 채로 유니버스가 미래를 봅니다**(§4.8
@@ -404,7 +418,7 @@ Phase 2에서 채워졌습니다.
 ⚠️ **Phase 1 시점의 시세는 코인만 실물이었습니다.** `krx` · `nasdaq` 실제 소스는
 아래 Phase 2에서 붙었습니다.
 
-### Phase 2 — 멀티 마켓 ★ 존재 이유 — **진행 중**
+### Phase 2 — 멀티 마켓 ★ 존재 이유 — **완료**
 
 - [x] `MarketCalendar` 3종 (24x7 / KRX / US) + 서머타임 전환일 회귀 테스트
       — `exchange_calendars`(XKRX · XNYS). 휴장일·조기폐장이 실제 값으로 들어옵니다
@@ -420,47 +434,47 @@ Phase 2에서 채워졌습니다.
       잡습니다** — 오늘 기준으로 조회하면 그 구간에 봉이 없어 빈 결과가 성공처럼 보입니다
 - [x] 두 소스 종가 정합성 검증 (§3.8) — 같은 봉을 다른 소스가 다르게 주면
       캐시 쓰기가 그 자리에서 잡아 `ingest`가 경고로 올립니다. 덮어쓰되 조용히 덮지 않습니다
-- [ ] ★ **`symbolUniverse`가 venue 목록을 받게 한다** — 아래 참조. **혼합 파이프라인의
-      선행 조건입니다**
-- [ ] Fresh Bar Gate 혼합 파이프라인 검증 (코인+한국+미국 동시)
+- [x] ★ **`symbolUniverse`가 venue 목록을 받는다** — 노드 하나가 여러 venue를 훑고,
+      유동성 컷은 venue별로 겁니다. 단수 `venue:` 표기도 계속 받습니다 (아래 참조)
+- [x] **랭킹·백분위·컷을 시장별로 분리** (규칙 17) — 섞으면 분산 넓은 코인이 위를
+      쓸어가 **모멘텀이 아니라 변동성으로 줄 세운 것**이 됩니다
+- [x] **유니버스 조회 소스를 능력으로 고른다** — 라우팅 표의 앞 소스(pykrx·yfinance)가
+      목록 조회를 구현하지 않아 **krx·nasdaq 유니버스가 아예 실패하고 있었습니다**
+- [x] Fresh Bar Gate 혼합 파이프라인 검증 (코인+한국+미국 동시) — 실측 통과
 
-#### ⚠️ 지금은 코인만 스캔합니다 — 그리고 시장을 늘리면 조용히 깨집니다
+#### 세 시장을 어떻게 한 번에 훑는가
 
-`pipelines/demo.yaml`의 유니버스 노드는 `venue: upbit` 하나입니다. 소스 4종이 전부
-붙었지만 파이프라인이 쓰지 않습니다.
-
-**노드를 3개로 늘리는 것으로는 안 됩니다.** `symbolUniverse`의 `venue`가 단수라
-시장마다 노드가 필요한데, 셋을 `marketData` 하나에 물리면 `Bundle.merge`가 context를
-`dict.update`로 합치면서 **세 노드가 모두 쓰는 `context["universe"]` 키가 덮어써집니다.**
-items는 제대로 합쳐지지만 유니버스는 마지막 것만 남아 **두 시장이 소리 없이 사라집니다.**
-
-**해결: `symbolUniverse`가 venue 목록을 받게 합니다.**
+**유니버스 노드는 하나입니다.** 시장마다 노드를 만들어 `marketData` 하나에 물리면
+`Bundle.merge`가 context를 `dict.update`로 합치면서 **세 노드가 모두 쓰는
+`context["universe"]` 키가 덮어써집니다** — items는 제대로 합쳐지지만 유니버스는
+마지막 것만 남아 두 시장이 소리 없이 사라집니다. 노드가 하나면 이 문제가 애초에 없습니다.
 
 ```yaml
 - id: universe
   type: symbolUniverse
   params:
-    venues:                        # str | list[str] — 단수 표기도 계속 받는다
+    venues:                                              # 단수 `venue:`도 계속 받습니다
       - { venue: upbit,  quote_currency: KRW, top_by_turnover: 60 }
       - { venue: krx,    top_by_turnover: 200 }
-      - { venue: nasdaq, top_by_turnover: 100 }
+      - { venue: nasdaq, limit: 100 }
 ```
 
-venue마다 `quote_currency`·`top_by_turnover`가 달라야 하므로(코인은 KRW 마켓 제한이
-필요하고 주식은 아님) **목록의 원소는 문자열이 아니라 조건 묶음**이어야 합니다.
+**목록의 원소가 문자열이 아니라 조건 묶음인 이유**는 venue마다 필요한 컷이 다르기
+때문입니다 — 코인은 KRW 마켓 제한이 필요하고 주식은 아니며, 미국 목록에는 거래대금이
+아예 없습니다.
 
-- 유동성 컷은 **venue별로 따로** 겁니다. 시장을 섞어 한 번에 자르면 거래대금 단위가
-  달라(원 vs 달러) 비교 자체가 성립하지 않습니다
-- 결과는 하나의 `context["universe"]`로 합칩니다 — 노드가 하나라 덮어쓰기가 발생하지 않습니다
-- `Bundle.merge`에 키별 예외를 넣는 방식은 **택하지 않았습니다.** context를 쓰는 노드가
-  늘 때마다 같은 고민이 반복됩니다
-- 미국 목록에는 거래대금이 없어(FDR이 심볼·이름만 줍니다) `top_by_turnover`가 전량을
-  걸러냅니다. **이 조합은 막거나 경고해야 합니다** — 지금 구현은 "거래대금을 받지 못해
-  제외"를 경고로 남기고 빈 유니버스를 만듭니다
-- 백테스트 차단(규칙 14)은 그대로 유지합니다
+| | |
+| :--- | :--- |
+| **유동성 컷** | **venue별로 따로** 겁니다. 섞어 자르면 거래대금 단위가 달라(원 vs 달러) 비교가 성립하지 않습니다 |
+| **랭킹·백분위·컷** | **시장별로** 나눕니다(규칙 17). 순위가 시장마다 1번부터 다시 시작하는 이유입니다 |
+| **`top_by_turnover`** | 소스가 거래대금을 줘야 합니다. krx는 FDR이 `Amount`를 줍니다 |
+| **`limit`** | 미국처럼 거래대금이 없는 venue의 대안. ⚠️ **소스가 준 순서**에 기댑니다 |
 
-**남은 것은 위 venue 목록 작업과 그것에 매달린 혼합 파이프라인 검증뿐입니다.**
-수집 계층(`ohlcv_cache` · Ingestion Worker)은 끝났으므로 선행 조건은 해소됐습니다.
+> ⚠️ **거래대금을 주지 않는 소스에 `top_by_turnover`를 걸면 노드가 거부합니다.**
+> 경고만 남기고 빈 목록을 돌려주면 **그 시장이 통째로 사라진 채 실행이 성공**하기 때문입니다.
+
+`--market crypto|krx|us`는 이 `venues` 목록도 함께 거릅니다 — 고정 목록만 걸러서는
+필터가 있다는 사실이 오히려 오해를 만듭니다. 백테스트 차단(규칙 14)은 그대로입니다.
 
 ### Phase 3 — ★ 리뷰 & 상주 실행
 

@@ -1,15 +1,15 @@
-# 기본 파이프라인 — 업비트 원화 마켓 횡단면 모멘텀
-#
-# Phase 1은 시장 하나(업비트)로 좁혀 끝까지 완주하는 것이 목적입니다. 무인증·24/7이라
-# 캘린더 분기도 주말 공백도 없어서, 미지수를 "전략 경로가 도는가" 하나로 좁힐 수 있습니다.
+# 기본 파이프라인 — 코인·한국·미국을 한 번에 훑는 횡단면 모멘텀 12-1
 #
 #   symbolUniverse → marketData → strategyRunner → persistSignal → logAlert
 #
 # 기본은 dry-run입니다. 부작용(signals 기록·봉 소비)은 --commit이 있을 때만 열립니다.
+#
+# ★ 유니버스 노드가 **하나**입니다. 시장마다 노드를 만들어 marketData 하나에 물리면
+#   Bundle.merge가 context["universe"]를 덮어써 두 시장이 소리 없이 사라집니다(§4.1).
 
-pipeline_id: pipe_upbit_momentum
-version: 1
-name: 업비트 횡단면 모멘텀 12-1
+pipeline_id: pipe_multimarket_momentum
+version: 2
+name: 멀티마켓 횡단면 모멘텀 12-1
 
 settings:
   user_timezone: Asia/Seoul
@@ -31,14 +31,25 @@ nodes:
   - id: universe
     type: symbolUniverse
     params:
-      venue: upbit
-      quote_currency: KRW      # 원화 마켓만 (BTC·USDT 마켓 제외)
-      # 24시간 거래대금 상위 N — 유동성 컷.
-      # 30으로 두면 신규 상장이 워밍업(274봉)에 걸려 절반이 빠지고, 실제로 줄
-      # 세우는 대상이 19종목까지 줄어든다. 횡단면 랭킹은 표본이 작으면 의미가
-      # 옅어지므로 넉넉히 잡는다. 이건 "얼마나 넓게 볼 것인가"라 전략 파라미터가
-      # 아니다 — top_pct를 만지는 것과 다르다.
-      top_by_turnover: 60
+      # 유동성 컷은 **venue마다 따로** 겁니다. 거래대금 단위가 원/달러로 달라
+      # 섞어서 한 번에 자르면 비교 자체가 성립하지 않습니다 (§3.7).
+      venues:
+        - venue: upbit
+          quote_currency: KRW    # 원화 마켓만 (BTC·USDT 마켓 제외)
+          # 30으로 두면 신규 상장이 워밍업(274봉)에 걸려 절반이 빠지고, 실제로 줄
+          # 세우는 대상이 19종목까지 줄어듭니다. 횡단면 랭킹은 표본이 작으면 의미가
+          # 옅어지므로 넉넉히 잡습니다. 이건 "얼마나 넓게 볼 것인가"라 전략
+          # 파라미터가 아닙니다 — top_pct를 만지는 것과 다릅니다.
+          top_by_turnover: 60
+
+        - venue: krx
+          top_by_turnover: 200   # FDR 목록이 거래대금(Amount)을 줍니다
+
+        # ⚠️ 미국 목록에는 거래대금이 없습니다(FDR이 심볼·이름만 줌). top_by_turnover를
+        #    걸면 전 종목이 탈락하므로 노드가 거부합니다. 대신 limit을 쓰는데,
+        #    이건 **소스가 준 순서**(시총 순으로 보이지만 보장은 아님)에 기댑니다.
+        - venue: nasdaq
+          limit: 100
     on_error: { policy: retry, max_attempts: 3, fallback: fail }
 
   - id: data

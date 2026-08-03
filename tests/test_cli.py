@@ -239,14 +239,20 @@ def test_explain_returns_the_evidence_chain(workspace: Path):
 
 
 def test_explain_records_what_the_rank_was_measured_against(workspace: Path):
-    """분모(`universe_size`)는 점수가 나온 종목 수다. 훑은 종목 수와 구분되어야 한다."""
+    """분모(`universe_size`)는 **그 시장에서** 점수가 나온 종목 수다 (규칙 17).
+
+    이 파이프라인은 코인·한국·미국 한 종목씩이라 랭킹 풀이 셋으로 갈린다.
+    `universe_scanned`(훑은 전체)와 `universe_size`(내 풀의 크기)가 다른 것이
+    정상이고, `rank_pool`이 없으면 "1 / 1"이 무엇의 1인지 알 수 없다.
+    """
     invoke("run", "--now", NOW, "--commit")
     signal_id = payload(invoke("signals", "list", "--json"))["signals"][0]["id"]
 
     features = payload(invoke("explain", str(signal_id), "--json"))["strategy"]["features"]
 
-    assert features["universe_scanned"] == 3  # 훑은 종목
-    assert features["universe_size"] == 3  # 그중 점수가 나온 종목
+    assert features["universe_scanned"] == 3  # 훑은 종목 전체
+    assert features["universe_size"] == 1  # 그중 같은 시장에서 점수가 나온 종목
+    assert features["rank_pool"] in {"crypto", "krx", "us"}
 
 
 @pytest.mark.parametrize(
@@ -448,3 +454,34 @@ def test_cache_only_run_needs_an_ingest_first(workspace: Path):
 
     assert after["signal_count"] > 0
     assert next(n["items"] for n in after["nodes"] if n["node_id"] == "data") == 3
+
+
+def test_market_filter_narrows_the_dynamic_universe(workspace: Path):
+    """★ `--market`이 동적 조회를 못 거르면 세 시장을 그대로 훑으면서 로그만 좁아진다."""
+    pipeline = json.loads(json.dumps(PIPELINE))
+    pipeline["nodes"].insert(
+        0,
+        {
+            "id": "universe",
+            "type": "symbolUniverse",
+            "params": {
+                "venues": [
+                    {"venue": "upbit", "top_by_turnover": 5},
+                    {"venue": "krx", "top_by_turnover": 5},
+                ]
+            },
+        },
+    )
+    path = workspace / "mixed.json"
+    path.write_text(json.dumps(pipeline, ensure_ascii=False), encoding="utf-8")
+
+    from app.cli import pipeline_file
+
+    spec = pipeline_file.load(path)
+    filtered, dropped = pipeline_file.filter_by_market(spec, "krx")
+
+    universe = next(n for n in filtered.nodes if n.type == "symbolUniverse")
+    assert [q["venue"] for q in universe.params["venues"]] == ["krx"]
+    assert "venues[upbit]" in dropped
+    # 동적 조회가 남아 있으면 "종목 0개"로 보이더라도 빈 유니버스가 아니다
+    assert pipeline_file.has_empty_universe(filtered) is False
