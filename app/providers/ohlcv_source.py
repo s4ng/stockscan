@@ -172,7 +172,7 @@ class CachedSource:
                 f"({result.provider_id}, {actual})가 다릅니다."
             )
         if self.writable and self._cacheable(result.provider_id):
-            notes.extend(await self._write(instrument, timeframe, result, actual))
+            notes.extend(await self._write(instrument, timeframe, result, actual, limit, end))
 
         return LoadResult(
             df=result.df,
@@ -212,22 +212,31 @@ class CachedSource:
                 )
                 if df.empty:
                     return None
-                if len(df) < limit and policy != "only":
+
+                job = await session.get(
+                    IngestionJobRow,
+                    (instrument.venue, instrument.symbol, timeframe, adjusted),
+                )
+                # ★ **"소스가 줄 수 있는 만큼은 다 받았다"**를 판정한다.
+                #
+                # `last_bar_time`이 아니라 `last_success_at`으로 보는 이유는
+                # 거래정지·폐지 종목이다 — 그 봉이 애초에 없어서 봉 시각으로 보면
+                # 영원히 "덜 받았다"가 된다. `lookback`은 그때 **요청한** 깊이라,
+                # 캐시가 그보다 얕다면 소스에 더 없는 것이다(신규 상장).
+                saturated = (
+                    job is not None
+                    and job.last_success_at is not None
+                    and job.last_success_at >= end
+                    and (job.lookback or 0) >= limit
+                )
+
+                covers_end = df.index[-1].to_pydatetime() >= end or saturated
+                deep_enough = len(df) >= limit or saturated
+                if not (covers_end and deep_enough) and policy != "only":
                     # 부족하면 소스로 간다 — 조용히 짧은 계열을 주면 전략이
                     # startup_candles에 못 미쳐 종목이 통째로 사라지고, 그 이유가
                     # 어디에도 남지 않는다.
                     return None
-                last = df.index[-1].to_pydatetime()
-                if last < end:
-                    # 그 봉이 실제로 없는 경우(거래정지·상장폐지)와 아직 수집하지
-                    # 않은 경우를 구분한다. 후자면 소스로 가야 한다.
-                    job = await session.get(
-                        IngestionJobRow,
-                        (instrument.venue, instrument.symbol, timeframe, adjusted),
-                    )
-                    fresh = job is not None and job.last_bar_time is not None
-                    if not (fresh and job.last_bar_time >= end):
-                        return None
         except SQLAlchemyError as exc:
             # 캐시 테이블이 아직 없는 DB(구버전)이거나 잠겼다. 수집이 안 됐다고
             # 실행을 실패시키지 않는다 — 소스는 여전히 살아 있다.
@@ -255,18 +264,37 @@ class CachedSource:
         timeframe: str,
         result: object,
         adjusted: bool,
+        limit: int,
+        end: datetime,
     ) -> list[str]:
         from app.storage import ohlcv_cache
 
+        df = result.df  # type: ignore[attr-defined]
+        provider_id = result.provider_id  # type: ignore[attr-defined]
         try:
             async with self.sessionmaker() as session:
                 report = await ohlcv_cache.write_bars(
                     session,
                     instrument,
                     timeframe,
-                    result.df,  # type: ignore[attr-defined]
+                    df,
                     adjusted=adjusted,
-                    source_id=result.provider_id,  # type: ignore[attr-defined]
+                    source_id=provider_id,
+                )
+                # 수집 이력도 남긴다. `run`만 쓰는 사용자에게도 "이 봉까지 받아 봤다"가
+                # 기록되어야 짧은 이력 종목이 매번 소스를 다시 부르지 않는다.
+                # `ingest`가 같은 봉을 두 번 받지 않게 되는 것도 여기서 온다.
+                await ohlcv_cache.record_job(
+                    session,
+                    instrument,
+                    timeframe,
+                    adjusted=adjusted,
+                    success=True,
+                    bars=report.written,
+                    lookback=limit,
+                    last_bar_time=df.index[-1].to_pydatetime() if not df.empty else None,
+                    source_id=provider_id,
+                    now=end,
                 )
                 await session.commit()
         except SQLAlchemyError as exc:

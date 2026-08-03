@@ -55,9 +55,29 @@ def write_run_report(data: ReportInput, path: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- 렌더
+def _rank_key(row: dict[str, Any]) -> tuple[float, str]:
+    """리포트 정렬 키 — **점수가 아니라 백분위다.**
+
+    ★ 점수로 전역 정렬하면 규칙 17을 리포트에서 되돌리는 꼴이 된다. 12개월 모멘텀의
+    스케일이 시장마다 달라서(코인 −60%~+300% vs 국내 −30%~+60%) 한 줄로 세우면
+    그 기간에 잘 간 시장이 위를 통째로 차지한다 — 종목을 고른 게 아니라 시장을
+    고른 표가 된다.
+
+    **백분위는 시장과 무관하게 같은 뜻이다.** "상위 2.5%"는 코인이든 주식이든
+    "제 시장에서 상위 2.5%"라서, 이걸로 세워야 섞인 표가 읽힌다.
+    """
+    features = row.get("features") or {}
+    percentile = features.get("percentile")
+    return (
+        float(percentile) if isinstance(percentile, int | float) else float("inf"),
+        str(row.get("instrument") or ""),
+    )
+
+
 def _render(data: ReportInput) -> str:
     result = data.result
-    rows = data.signals[:MAX_ROWS]
+    ordered = sorted(data.signals, key=_rank_key)
+    rows = ordered[:MAX_ROWS]
     truncated = max(0, len(data.signals) - MAX_ROWS)
 
     banner = (
@@ -107,6 +127,11 @@ def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
             f"<td>{_cell(value)}</td>"
             for value in (
                 row.get("instrument"),
+                # `005930`만으로는 무슨 회사인지 알 수 없다. 소스가 준 이름을 쓴다.
+                row.get("display_name"),
+                # 어느 시장 안에서 매긴 순위인가 (규칙 17). 이게 없으면 "1 / 39"의
+                # 39가 무엇의 39인지 알 수 없다.
+                (row.get("features") or {}).get("rank_pool"),
                 row.get("timeframe"),
                 row.get("as_of"),
                 (row.get("features") or {}).get("rank"),
@@ -127,8 +152,8 @@ def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
     )
     return f"""<div class="scroll"><table>
 <thead><tr>
-<th>종목</th><th>봉</th><th>as_of</th><th>순위</th><th>유니버스</th>
-<th>백분위</th><th>점수</th><th>전략</th><th>소스 해시</th>
+<th>종목</th><th>이름</th><th>시장</th><th>봉</th><th>as_of</th><th>순위</th>
+<th>유니버스</th><th>백분위</th><th>점수</th><th>전략</th><th>소스 해시</th>
 </tr></thead>
 <tbody>
 {body}

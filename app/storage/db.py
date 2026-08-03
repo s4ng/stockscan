@@ -94,14 +94,49 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
-async def init_db() -> None:
-    """테이블을 만든다.
+class SchemaDriftError(RuntimeError):
+    """기존 DB에 모델의 컬럼이 없을 때. 사후에 조용히 망가지는 것을 앞당겨 터뜨린다."""
 
-    TODO(Phase 1): Alembic 마이그레이션으로 교체한다. 스키마가 바뀌기 시작하면
-                   create_all로는 기존 DB를 따라잡을 수 없다.
+
+async def init_db() -> None:
+    """테이블을 만들고, **기존 테이블의 컬럼이 모자라지 않은지 확인한다.**
+
+    ⚠️ `create_all`은 **없는 테이블만 만든다.** 기존 테이블에 컬럼을 더하지 않으므로,
+    모델에 컬럼을 추가하면 예전 DB는 그대로 남는다. 그리고 그 DB에 INSERT를 하면
+    `OperationalError`가 나는데 캐시 쓰기 경로가 그걸 삼켜(`except SQLAlchemyError`)
+    **"조금 느린 것"처럼 보인다** — 실제로는 캐시가 영영 안 채워진다.
+
+    실제로 한 번 밟은 사고라 여기서 앞당겨 터뜨린다. Alembic을 들이기 전까지의
+    임시방편이지만, 조용한 열화보다는 낫다.
     """
-    async with get_engine().begin() as connection:
+    engine = get_engine()
+    async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        drift = await connection.run_sync(_missing_columns)
+    if drift:
+        detail = " · ".join(f"{t}: {', '.join(cols)}" for t, cols in sorted(drift.items()))
+        raise SchemaDriftError(
+            f"DB 스키마가 모델보다 낡았습니다 — 없는 컬럼: {detail}. "
+            f"`ohlcv_cache`·`signals`는 자산이므로 지우기 전에 백업하세요. "
+            f"캐시만 잃어도 된다면 DB 파일을 지우고 다시 실행하면 재생성됩니다."
+        )
+
+
+def _missing_columns(connection: object) -> dict[str, list[str]]:
+    """모델에는 있는데 실제 테이블에는 없는 컬럼."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(connection)
+    existing = set(inspector.get_table_names())
+    drift: dict[str, list[str]] = {}
+    for name, table in Base.metadata.tables.items():
+        if name not in existing:
+            continue
+        actual = {col["name"] for col in inspector.get_columns(name)}
+        missing = [c.name for c in table.columns if c.name not in actual]
+        if missing:
+            drift[name] = missing
+    return drift
 
 
 @asynccontextmanager

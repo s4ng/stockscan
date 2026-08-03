@@ -37,6 +37,7 @@ from app.ingest import worker
 from app.market.timeframe import JUDGEMENT
 from app.nodes.registry import catalog
 from app.providers.ohlcv_source import CachedSource, DirectSource
+from app.providers.universe_source import CachedUniverse, DirectUniverse
 from app.report.run_report import ReportInput, report_path, write_run_report
 from app.schemas.pipeline import ExecutionMode, PipelineSpec
 from app.storage import db, history
@@ -152,6 +153,7 @@ async def _execute(
     # 레지스트리는 RunContext가 만든 것을 그대로 쓴다 — 소스 구성의 단일 출처가
     # 한 곳이어야 테스트가 네트워크를 막을 수 있다 (tests/conftest.py).
     ctx.ohlcv = _ohlcv_source(ctx.providers, spec, commit)
+    ctx.universe = _universe_source(ctx.providers, ctx.now)
 
     if commit:
         async with db.session_scope() as session:
@@ -207,6 +209,18 @@ def _ohlcv_source(providers: Any, spec: PipelineSpec, commit: bool) -> Any:
         writable=True,
         default_adjusted=spec.settings.adjusted,
     )
+
+
+def _universe_source(providers: Any, now: datetime) -> Any:
+    """종목 목록을 어디서 얻을지 고른다 (4.7).
+
+    캐시가 아끼는 것은 **거래대금이 없는 목록**뿐이다 — 미국 목록(FDR 6,700행)이
+    가장 무거운 호출이라 이득의 대부분이 거기 있다. `top_by_turnover`를 거는
+    venue는 노드가 `needs_turnover=True`로 불러 캐시를 건너뛴다.
+    """
+    if sqlite_path(db.database_url()) is None:
+        return DirectUniverse(providers)
+    return CachedUniverse(providers, db.get_sessionmaker(), now=now)
 
 
 def _bar_state(out: Out, pipeline_id: str, commit: bool) -> Any:

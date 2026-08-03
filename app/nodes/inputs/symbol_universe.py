@@ -222,12 +222,25 @@ class SymbolUniverseNode(BaseNode):
                 f"{query.venue}: top_by_turnover와 limit을 함께 쓸 수 없습니다. "
                 f"거래대금을 주는 소스면 top_by_turnover를, 아니면 limit을 쓰세요."
             )
+        assert ctx.universe is not None  # RunContext.__post_init__이 채운다
         try:
-            entries, source_id = await ctx.providers.list_instruments(
-                query.venue, source=source
+            # 거래대금이 필요하면 캐시를 건너뛴다 — 어제 값으로 유동성 컷을 걸면
+            # 그날의 후보 집합이 통째로 달라진다 (4.7 `instruments`).
+            result = await ctx.universe.list_instruments(
+                query.venue,
+                source=source,
+                needs_turnover=query.top_by_turnover is not None,
             )
         except (UniverseNotSupportedError, NoProviderError) as exc:
             raise NodeError(str(exc)) from exc
+
+        entries, source_id = result.entries, result.source_id
+        for note in result.notes:
+            ctx.log.info(note)
+        for warning in result.warnings:
+            # 캐시 쓰기 실패가 조용하면 "좀 느리네"로 보이는데, 실제로는 캐시가
+            # 영영 안 채워지고 있다.
+            ctx.log.warning(warning)
 
         if query.quote_currency:
             wanted = query.quote_currency.upper()

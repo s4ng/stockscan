@@ -321,6 +321,7 @@ async def ingest(
                 adjusted=actual,
                 success=True,
                 bars=written.written,
+                lookback=target.lookback,
                 last_bar_time=last_bar,
                 source_id=result.provider_id,
                 now=ctx.now,

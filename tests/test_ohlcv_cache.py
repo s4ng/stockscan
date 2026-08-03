@@ -304,3 +304,67 @@ async def test_crypto_is_never_marked_adjusted():
     reg.register(CcxtProvider("upbit"))  # 생성은 네트워크를 타지 않는다
     reg.set_route("upbit", "*", ["ccxt.upbit"])
     assert predicted_adjusted(reg, BTC, "1d", True) is False
+
+
+async def test_short_history_hits_the_cache_once_the_source_is_exhausted(maker):
+    """★ 신규 상장 종목은 소스도 더 줄 수 없다. 매번 다시 부르면 순수한 낭비다.
+
+    `lookback`(요청한 깊이)이 없으면 "아직 덜 모았다"와 "원래 이것뿐이다"를
+    구분할 수 없어, 이력이 짧은 종목이 **영원히** 캐시를 못 맞힌다.
+    """
+    end = START + timedelta(days=29)
+    async with maker() as session:
+        await ohlcv_cache.write_bars(  # 5봉뿐 — 상장이 늦었다
+            session, BTC, "1d", frame(5), adjusted=True, source_id="synthetic"
+        )
+        await ohlcv_cache.record_job(
+            session,
+            BTC,
+            "1d",
+            adjusted=True,
+            success=True,
+            lookback=30,  # 30봉을 요청했는데 5봉만 왔다 = 소스에 더 없다
+            last_bar_time=START + timedelta(days=4),
+            now=end,
+        )
+        await session.commit()
+
+    reg = registry()
+
+    async def explode(*args, **kwargs):
+        raise AssertionError("소스가 줄 수 있는 만큼 다 받았으면 다시 부르면 안 된다")
+
+    reg.fetch_ohlcv = explode  # type: ignore[method-assign]
+    result = await CachedSource(reg, maker, writable=False).load(BTC, "1d", end, 30)
+
+    assert result.from_cache is True
+    assert len(result.df) == 5  # 짧다는 사실은 그대로 드러난다
+    assert any("5봉" in n for n in result.notes)
+
+
+async def test_shallow_cache_without_a_job_still_goes_to_the_source(maker):
+    """수집 이력이 없으면 '덜 모은 것'으로 본다 — 조용히 짧은 계열을 주면 안 된다."""
+    async with maker() as session:
+        await ohlcv_cache.write_bars(
+            session, BTC, "1d", frame(5), adjusted=True, source_id="synthetic"
+        )
+        await session.commit()
+
+    result = await CachedSource(registry(), maker, writable=False).load(
+        BTC, "1d", START + timedelta(days=29), 30
+    )
+    assert result.from_cache is False
+
+
+async def test_a_run_records_the_ingestion_job(maker):
+    """`run`만 쓰는 사용자에게도 수집 이력이 남아야 위 판정이 성립한다."""
+    from app.storage.models import IngestionJobRow
+
+    end = START + timedelta(days=29)
+    await CachedSource(registry(), maker, writable=True).load(BTC, "1d", end, 30)
+
+    async with maker() as session:
+        job = await session.get(IngestionJobRow, ("upbit", "KRW-BTC", "1d", True))
+    assert job is not None
+    assert job.lookback == 30
+    assert job.last_success_at == end

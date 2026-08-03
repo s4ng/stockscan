@@ -17,6 +17,7 @@ from app.market.calendar import MarketCalendar, build_calendars
 from app.market.instrument import InstrumentRef
 from app.providers.ohlcv_source import DirectSource, OhlcvSource
 from app.providers.registry import ProviderRegistry, default_registry
+from app.providers.universe_source import DirectUniverse, UniverseSource
 from app.schemas.pipeline import ExecutionMode, PipelineSettings
 
 UTC = ZoneInfo("UTC")
@@ -74,6 +75,9 @@ class RunContext:
     없는지는 노드의 관심사가 아니어야 캐시 계층을 갈아 끼울 수 있다.
     """
 
+    universe: UniverseSource | None = None
+    """종목 목록을 얻는 창구 (4.7). 위와 같은 이유로 노드에서 분리한다."""
+
     bar_state: BarStateStore = field(default_factory=InMemoryBarState)
     """Fresh Bar Gate가 참조하는 직전 as_of 저장소."""
 
@@ -107,6 +111,8 @@ class RunContext:
     def __post_init__(self) -> None:
         if self.ohlcv is None:
             self.ohlcv = DirectSource(self.providers, default_adjusted=self.settings.adjusted)
+        if self.universe is None:
+            self.universe = DirectUniverse(self.providers)
 
     @property
     def user_tz(self) -> ZoneInfo:
@@ -161,6 +167,7 @@ class RunContext:
             providers=self.providers,
             calendars=self.calendars,
             ohlcv=self.ohlcv,
+            universe=self.universe,
             bar_state=self.bar_state,
             signals=self.signals,
             commit=self.commit,
@@ -177,6 +184,7 @@ class RunContext:
         now: datetime | None = None,
         providers: ProviderRegistry | None = None,
         ohlcv: OhlcvSource | None = None,
+        universe: UniverseSource | None = None,
         run_id: str | None = None,
         pipeline_id: str = "",
         bar_state: BarStateStore | None = None,
@@ -197,6 +205,7 @@ class RunContext:
             providers=providers or default_registry(),
             calendars=build_calendars(settings.daily_boundary),
             ohlcv=ohlcv,
+            universe=universe,
             bar_state=bar_state or InMemoryBarState(),
             signals=signals or CollectingSink(),
             commit=commit,

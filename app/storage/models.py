@@ -236,6 +236,31 @@ class OhlcvCacheRow(Base):
     ingested_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 
+class InstrumentRow(Base):
+    """심볼 마스터 캐시 (ARCHITECTURE.md 4.7).
+
+    ★ **거래대금은 여기 넣지 않는다.** 목록 응답에는 성격이 다른 두 가지가 섞여
+    있는데, 마스터(심볼·이름·상장 여부)는 하루 이틀 낡아도 무해한 반면 **거래대금은
+    캐시하는 순간 그날의 유니버스가 바뀐다** — 어제의 상위 60종목을 오늘 훑게 된다.
+    그건 성능 문제가 아니라 판단이 달라지는 문제다.
+
+    그래서 이 표가 아끼는 것은 **거래대금이 없는 목록**뿐이다. 미국 목록(FDR)이
+    정확히 그 경우고, 매 실행마다 6,700행을 다시 받던 것이 여기서 멈춘다.
+    """
+
+    __tablename__ = "instruments"
+
+    venue: Mapped[str] = mapped_column(String(32), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    """소스가 준 목록에서의 순서. `limit` 컷이 이 순서에 기댄다."""
+
+    source_id: Mapped[str] = mapped_column(String(64), default="")
+    refreshed_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
 class IngestionJobRow(Base):
     """수집 대상 하나의 상태 (ARCHITECTURE.md 4.7 표).
 
@@ -256,6 +281,14 @@ class IngestionJobRow(Base):
     last_source_id: Mapped[str | None] = mapped_column(String(64), default=None)
     bars: Mapped[int] = mapped_column(Integer, default=0)
     """마지막 수집에서 캐시에 새로 들어간 봉 수 (신규 + 갱신)."""
+
+    lookback: Mapped[int] = mapped_column(Integer, default=0)
+    """마지막 성공에서 **요청한** 봉 수.
+
+    캐시에 든 봉이 이보다 적다면 **소스가 그 이상 주지 못한다**는 뜻이다 (신규 상장).
+    이 값이 없으면 "아직 덜 모았다"와 "원래 이것뿐이다"를 구분할 수 없어서, 짧은
+    이력 종목이 매 실행마다 소스를 다시 부른다.
+    """
 
     failure_count: Mapped[int] = mapped_column(Integer, default=0)
     """연속 실패 횟수. 성공하면 0으로 되돌린다."""

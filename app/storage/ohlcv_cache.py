@@ -239,6 +239,7 @@ async def record_job(
     adjusted: bool,
     success: bool,
     bars: int = 0,
+    lookback: int = 0,
     last_bar_time: datetime | None = None,
     source_id: str | None = None,
     error: str | None = None,
@@ -261,6 +262,7 @@ async def record_job(
             timeframe=timeframe,
             adjusted=adjusted,
             bars=0,
+            lookback=0,
             failure_count=0,
         )
         session.add(row)
@@ -270,6 +272,9 @@ async def record_job(
         row.last_bar_time = last_bar_time
         row.last_source_id = source_id
         row.bars = bars
+        # 더 깊게 요청한 적이 있으면 그 값을 남긴다 — 얕은 요청이 "소스가 이만큼밖에
+        # 못 준다"는 판정을 뒤집어 버리면 안 된다.
+        row.lookback = max(lookback, row.lookback or 0)
         row.failure_count = 0
         row.last_error = None
     else:
