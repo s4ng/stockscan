@@ -29,11 +29,15 @@
 
 ## 현재 상태
 
-> **Phase 1 완료 기준 충족 · 자동 실행 방식 결정 1건 남음**
+> **Phase 1 완료 · Phase 2 진행 중 (수집 계층까지 완료)**
 >
 > `marketscan run --commit`이 **업비트 실제 일봉**으로 끝까지 돕니다 — 거래소에서 유니버스를
 > 뽑고, 12-1 모멘텀으로 줄 세우고, 신호를 남기고, `explain`으로 되짚을 수 있습니다.
-> **주식(`krx` · `nasdaq`)은 아직 `synthetic` 더미입니다** — PyKRX · yfinance · FDR은 Phase 2입니다.
+> **시세 소스 4종(PyKRX · yfinance · FDR · CCXT)과 `ohlcv_cache` 수집 계층이 붙었습니다.**
+>
+> ⚠️ **아직 파이프라인은 업비트만 스캔합니다.** `symbolUniverse`의 `venue`가 단수라
+> 시장을 늘리려면 노드를 늘려야 하는데, 그러면 조용히 깨집니다 — 아래 Phase 2 참조.
+> 자동 실행 방식(OS 스케줄러 vs `serve`)도 아직 미정입니다.
 
 v0.5 전환이 끝났습니다. 아래가 v0.4에서 바뀐 것들입니다.
 
@@ -227,7 +231,51 @@ manualTrigger → symbolUniverse → marketData → strategyRunner → persistSi
 > 과거를 리플레이하면 **전략 코드가 완전히 인과적인 채로 유니버스가 미래를 봅니다**(§4.8
 > 서바이버십). `strategy check`의 AST 검사에 걸리지 않는 경로라 노드가 직접 막습니다.
 
-### 9. 자동으로 돌린다
+### 9. 봉을 미리 모아 둔다
+
+```bash
+marketscan ingest                    # 무엇을 모을지와 지금 캐시에 뭐가 있는지 (기본)
+marketscan ingest --commit           # 실제로 모아 ohlcv_cache에 쌓는다
+marketscan ingest --venue krx --include-delisted --commit
+```
+
+```
+수집 대상 60종목 · 캐시 없음 3종목
+
+종목           봉  요청  캐시  마지막 봉
+-------------  --  ----  ----  -------------------------
+upbit:KRW-BTC  1d  320   320   2026-08-03T00:00:00+00:00
+upbit:KRW-ETH  1d  320   0     -
+```
+
+**수집 대상은 파이프라인에서 자동으로 나옵니다.** 유니버스 노드를 실제로 돌려
+그날 훑을 종목을 그대로 씁니다 — 목록을 따로 관리하면 파이프라인을 고칠 때마다
+어긋나고, 어긋난 종목은 캐시가 비어 조용히 빠집니다.
+
+| | |
+| :--- | :--- |
+| **왜 실행에서 떼어 냈나** | 노드가 매 실행마다 API를 부르면 200종목을 훑는 순간 무료 소스가 막힙니다. 레이트 리밋을 한 곳에서만 밟습니다 |
+| **왜 지우지 않나** | `ohlcv_cache`는 성능 최적화가 아니라 **영구 보관하는 데이터 자산**입니다. yfinance가 막혀도 쌓인 이력으로 파이프라인과 백테스트가 계속 돕니다. **백업 대상입니다** |
+| **하루에 몇 번 불러도 되나** | 됩니다. 이미 그 봉까지 성공한 대상은 소스를 두드리지 않습니다 (`--force`로 무시) |
+| **폐지 종목은?** | `--include-delisted`. **폐지 시점을 기준으로** 모읍니다 — 오늘 기준으로 조회하면 그 구간에 봉이 없어 빈 결과가 성공처럼 보입니다(§4.8 서바이버십) |
+
+`marketData` 노드의 `cache` 파라미터가 읽는 방식을 정합니다.
+
+| 값 | 동작 |
+| :--- | :--- |
+| `auto` (기본) | 캐시를 먼저 보고, 요청 구간을 못 채우면 소스로 갑니다 |
+| `off` | 항상 소스를 부릅니다 (정합성 비교·디버깅) |
+| `only` | **외부 호출을 하지 않습니다.** 커버리지가 모자라면 사유와 함께 그 종목을 제외합니다 |
+
+> ⚠️ **캐시 쓰기도 `--commit`이 있어야 열립니다.** dry-run은 읽기만 합니다 —
+> 읽지 않으면 dry-run이 실제 실행을 예측하지 못하고, 쓰면 "읽기 전용 실행은 DB
+> 파일조차 만들지 않는다"가 깨집니다.
+
+같은 봉을 두 소스가 다르게 주면 수집이 **그 자리에서 경고**합니다(§3.8).
+덮어쓰되 조용히 덮지 않습니다 — 수정주가 정책 차이로 생긴 계열 불연속은
+사후에 찾을 방법이 이것뿐입니다.
+
+### 10. 자동으로 돌린다
 
 ⚠️ **아직 정하지 않았습니다**(§11-4b). 지금 확정된 것은 *무엇을 부르는가*뿐입니다.
 
@@ -277,8 +325,8 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로, `--mark
 - [x] `Indicator` 범주 동결 — `maFilter`는 남기고 신규 추가 금지
 - [x] `pyproject.toml`에 `[project.scripts]` 등록
 
-\* `ingest`는 명령 표면만 있습니다. 실제 수집(`ohlcv_cache` · Ingestion Worker)은 Phase 2입니다 —
-`--json` 출력의 `implemented: false`가 이 사실을 명시합니다.
+\* `ingest`는 Phase 0.5에서 명령 표면만 있었고, 실제 수집(`ohlcv_cache` · Ingestion Worker)은
+Phase 2에서 채워졌습니다.
 
 **완료 기준 ✅**: `marketscan run --dry-run`이 더미 전략(`strategies/demo_momentum.py`)으로 끝까지 돕니다.
 
@@ -303,8 +351,8 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로, `--mark
 **완료 기준 ✅**: 업비트 실제 일봉으로 `marketscan run --commit`이 돌고, 나온 신호를
 `explain`으로 되짚을 수 있으며, 같은 봉으로 다시 돌리면 stale로 걸러집니다.
 
-⚠️ **시세는 코인만 실물입니다.** `krx` · `nasdaq`은 아직 `synthetic` 더미 소스이고,
-실제 소스 4종은 Phase 2입니다.
+⚠️ **Phase 1 시점의 시세는 코인만 실물이었습니다.** `krx` · `nasdaq` 실제 소스는
+아래 Phase 2에서 붙었습니다.
 
 ### Phase 2 — 멀티 마켓 ★ 존재 이유 — **진행 중**
 
@@ -312,18 +360,19 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로, `--mark
       — `exchange_calendars`(XKRX · XNYS). 휴장일·조기폐장이 실제 값으로 들어옵니다
 - [x] 무인증 일봉 소스 4종 — `PykrxProvider` · `YFinanceProvider` · `FdrProvider` · `CcxtProvider`
 - [x] Routing Table — `krx: pykrx→fdr` · `nasdaq/nyse: yfinance→fdr` · `upbit: ccxt`
-- [ ] **폴백 가시화 회귀 테스트** — `failed_sources` 경로는 구현돼 있으나 실제 소스
-      조합으로는 아직 검증하지 않았습니다
-- [ ] **Ingestion Worker + `ohlcv_cache` 영구 보관** — 지금은 `Market Data`가 실행마다
-      Provider를 직접 호출합니다. §3.9가 "캐시는 성능이 아니라 데이터 자산"이라고
-      정한 지점이고, `marketscan ingest`는 여전히 `implemented: false`입니다
-- [ ] **상장폐지 종목 수집** — `FdrProvider.list_delisted()`까지 됐고, **수집·보관은
-      Ingestion Worker에 달려 있습니다.** 폐지 종목의 과거 일봉을 실제로 받을 수
-      있다는 것은 확인했습니다 (2018년 이후 폐지 주권 표본 10/10)
+- [x] **폴백 가시화 회귀 테스트** — 실제 조합(`pykrx→fdr`)으로 앞 소스를 죽여
+      `failed_sources`가 `Item.meta["fallback_from"]`과 경고 로그까지 닿는지 확인합니다
+      (`tests/test_fallback.py`)
+- [x] **Ingestion Worker + `ohlcv_cache` 영구 보관** — `marketscan ingest --commit`이
+      실제로 모읍니다. 노드는 `ctx.ohlcv`만 보고 **뒤가 캐시인지 모릅니다**(§3.9).
+      `adjusted`가 키에 들어가고(규칙 8) `source_id`가 남습니다
+- [x] **상장폐지 종목 수집** — `ingest --include-delisted`. **폐지 시점을 `end`로
+      잡습니다** — 오늘 기준으로 조회하면 그 구간에 봉이 없어 빈 결과가 성공처럼 보입니다
+- [x] 두 소스 종가 정합성 검증 (§3.8) — 같은 봉을 다른 소스가 다르게 주면
+      캐시 쓰기가 그 자리에서 잡아 `ingest`가 경고로 올립니다. 덮어쓰되 조용히 덮지 않습니다
 - [ ] ★ **`symbolUniverse`가 venue 목록을 받게 한다** — 아래 참조. **혼합 파이프라인의
       선행 조건입니다**
 - [ ] Fresh Bar Gate 혼합 파이프라인 검증 (코인+한국+미국 동시)
-- [ ] 두 소스 종가 정합성 검증 (§3.8) — 같은 날 종가가 다르면 경고
 
 #### ⚠️ 지금은 코인만 스캔합니다 — 그리고 시장을 늘리면 조용히 깨집니다
 
@@ -360,10 +409,8 @@ venue마다 `quote_currency`·`top_by_turnover`가 달라야 하므로(코인은
   제외"를 경고로 남기고 빈 유니버스를 만듭니다
 - 백테스트 차단(규칙 14)은 그대로 유지합니다
 
-**다음 세션은 `ohlcv_cache`부터 시작하는 것이 맞습니다.** 남은 항목 대부분이 캐시에
-매달려 있습니다 — 상장폐지 수집도, 혼합 파이프라인 검증도 수집 계층이 있어야 합니다.
-다만 위 venue 목록 작업은 분량이 작고 혼합 파이프라인의 선행 조건이라 **먼저 해도
-됩니다.**
+**남은 것은 위 venue 목록 작업과 그것에 매달린 혼합 파이프라인 검증뿐입니다.**
+수집 계층(`ohlcv_cache` · Ingestion Worker)은 끝났으므로 선행 조건은 해소됐습니다.
 
 ### Phase 3 — 백테스트
 
@@ -402,7 +449,7 @@ venue마다 `quote_currency`·`top_by_turnover`가 달라야 하므로(코인은
 | 명령 | 부작용 | 용도 |
 | :--- | :---: | :--- |
 | `run [--market M] [--commit]` | **`--commit` 시에만** | 파이프라인 실행. **기본은 dry-run** |
-| `ingest [--venue V]` | 없음 (Phase 2) | 일봉 수집 — 아직 미구현 |
+| `ingest [--venue V] [--commit]` | **`--commit` 시에만** | 일봉 수집 → `ohlcv_cache`. **기본은 계획만** |
 | `explain <signal_id>` | 없음 | **왜 이 신호가 났는가** — 전략·해시·순위·소스·폴백 |
 | `signals list` | 없음 | 신호 이력 |
 | `signals ack <id> --acted\|--ignored` | 응답 기록 | **이 신호대로 움직였는가** (§4.8 오버라이드 추적) |
@@ -450,9 +497,10 @@ marketscan/
     ├── engine/                Bundle·Item 계약, RunContext, DAG 검증·실행, 신호 배출구
     ├── strategies/            Strategy 프로토콜 · 로더(SHA-256) · AST 인과성 검사
     ├── market/                InstrumentRef, MarketCalendar, 타임프레임 정책
-    ├── providers/             시세 소스 플러그인 + 라우팅·폴백
+    ├── providers/             시세 소스 플러그인 + 라우팅·폴백 · 캐시 계층(ohlcv_source)
+    ├── ingest/                Ingestion Worker — 수집 대상 도출·수집 (§3.9)
     ├── nodes/                 배선용 노드 (트리거·입력·전략·로직·액션)
-    └── storage/               SQLAlchemy 모델 · 실행 이력 · 신호
+    └── storage/               SQLAlchemy 모델 · 실행 이력 · 신호 · ohlcv_cache
 ```
 
 ---

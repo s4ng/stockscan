@@ -15,6 +15,7 @@ from app.engine.signals import CollectingSink, SignalSink
 from app.engine.state import BarStateStore, InMemoryBarState
 from app.market.calendar import MarketCalendar, build_calendars
 from app.market.instrument import InstrumentRef
+from app.providers.ohlcv_source import DirectSource, OhlcvSource
 from app.providers.registry import ProviderRegistry, default_registry
 from app.schemas.pipeline import ExecutionMode, PipelineSettings
 
@@ -66,6 +67,13 @@ class RunContext:
     settings: PipelineSettings
     providers: ProviderRegistry
     calendars: dict[str, MarketCalendar]
+    ohlcv: OhlcvSource | None = None
+    """봉을 얻는 창구 (3.9). None이면 소스를 직접 부르는 구현이 들어간다.
+
+    **노드는 `ctx.providers`가 아니라 이것을 쓴다.** 뒤에 `ohlcv_cache`가 있는지
+    없는지는 노드의 관심사가 아니어야 캐시 계층을 갈아 끼울 수 있다.
+    """
+
     bar_state: BarStateStore = field(default_factory=InMemoryBarState)
     """Fresh Bar Gate가 참조하는 직전 as_of 저장소."""
 
@@ -95,6 +103,10 @@ class RunContext:
     log: NodeLogger = field(default_factory=NodeLogger)
     node_id: str | None = None
     """현재 실행 중인 노드. bind()로 주입된다."""
+
+    def __post_init__(self) -> None:
+        if self.ohlcv is None:
+            self.ohlcv = DirectSource(self.providers, default_adjusted=self.settings.adjusted)
 
     @property
     def user_tz(self) -> ZoneInfo:
@@ -148,6 +160,7 @@ class RunContext:
             settings=self.settings,
             providers=self.providers,
             calendars=self.calendars,
+            ohlcv=self.ohlcv,
             bar_state=self.bar_state,
             signals=self.signals,
             commit=self.commit,
@@ -163,6 +176,7 @@ class RunContext:
         mode: ExecutionMode | None = None,
         now: datetime | None = None,
         providers: ProviderRegistry | None = None,
+        ohlcv: OhlcvSource | None = None,
         run_id: str | None = None,
         pipeline_id: str = "",
         bar_state: BarStateStore | None = None,
@@ -182,6 +196,7 @@ class RunContext:
             settings=settings,
             providers=providers or default_registry(),
             calendars=build_calendars(settings.daily_boundary),
+            ohlcv=ohlcv,
             bar_state=bar_state or InMemoryBarState(),
             signals=signals or CollectingSink(),
             commit=commit,

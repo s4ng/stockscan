@@ -204,3 +204,61 @@ class SignalRow(Base):
     """
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class OhlcvCacheRow(Base):
+    """수집한 일봉. ★ **이 테이블은 지우지 않는다** (ARCHITECTURE.md 3.9).
+
+    성능 최적화가 아니라 **영구 보관하는 데이터 자산**이다. 무료 소스는 언제든
+    막히고, 막힌 뒤에 남는 것은 여기 쌓인 것뿐이다. 백업 대상에 포함한다.
+
+    PK에 `adjusted`가 들어가는 것이 핵심이다 (3.8 / 규칙 8). 조정가와 비조정가가
+    한 계열에 섞이면 지표가 조용히 어긋나고, 어긋난 지점을 사후에 찾을 수 없다.
+    같은 이유로 `source_id`를 남긴다 — 폴백으로 소스가 바뀐 구간을 되짚는 유일한 단서다.
+    """
+
+    __tablename__ = "ohlcv_cache"
+
+    venue: Mapped[str] = mapped_column(String(32), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(64), primary_key=True)
+    timeframe: Mapped[str] = mapped_column(String(8), primary_key=True)
+    adjusted: Mapped[bool] = mapped_column(Boolean, primary_key=True)
+    bar_time: Mapped[datetime] = mapped_column(UtcDateTime, primary_key=True)
+    """봉의 **마감 시각** (UTC). 시가 시각이 아니다 (규칙 15)."""
+
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float)
+
+    source_id: Mapped[str] = mapped_column(String(64))
+    ingested_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class IngestionJobRow(Base):
+    """수집 대상 하나의 상태 (ARCHITECTURE.md 4.7 표).
+
+    "언제 마지막으로 성공했는가"가 남아야 **소스가 조용히 죽은 것**을 안다.
+    캐시에 봉이 있으면 파이프라인은 계속 도는데, 그 봉이 3주 전 것이라는 사실은
+    여기를 보지 않으면 드러나지 않는다.
+    """
+
+    __tablename__ = "ingestion_jobs"
+
+    venue: Mapped[str] = mapped_column(String(32), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(64), primary_key=True)
+    timeframe: Mapped[str] = mapped_column(String(8), primary_key=True)
+    adjusted: Mapped[bool] = mapped_column(Boolean, primary_key=True)
+
+    last_success_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
+    last_bar_time: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
+    last_source_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    bars: Mapped[int] = mapped_column(Integer, default=0)
+    """마지막 수집에서 캐시에 새로 들어간 봉 수 (신규 + 갱신)."""
+
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    """연속 실패 횟수. 성공하면 0으로 되돌린다."""
+
+    last_error: Mapped[str | None] = mapped_column(String, default=None)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)

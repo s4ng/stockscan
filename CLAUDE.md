@@ -11,8 +11,9 @@
 **`ARCHITECTURE.md`가 설계의 단일 출처다.** 구조를 바꾸는 작업 전에 반드시 읽고,
 설계를 바꿨다면 그 문서도 함께 갱신한다.
 
-**현재 Phase 1 완료 기준 충족 · 자동 실행 방식 결정 1건 남음.**
-남은 작업 목록은 `README.md`의 체크박스를 본다.
+**현재 Phase 2 진행 중 — 수집 계층(`ohlcv_cache` · Ingestion Worker)까지 완료.**
+남은 것은 `symbolUniverse`의 venue 목록화와 그것에 매달린 혼합 파이프라인 검증,
+그리고 자동 실행 방식 결정이다. 목록은 `README.md`의 체크박스를 본다.
 
 | | v0.4 (걷어냄) | **v0.5 (현재 코드)** |
 | :--- | :--- | :--- |
@@ -23,8 +24,9 @@
 | 정의 형식 | DAG JSON | **YAML** (§11-4 확정 — 스키마는 그대로) |
 | 자동 실행 | APScheduler | ⚠️ **미정** — OS 스케줄러 vs `serve` (§11-4b) |
 
-**코인 시세는 실물이다** (`CcxtProvider` · 업비트). **주식은 아직 `synthetic` 더미**이고
-실제 소스 4종은 Phase 2다. 이 비대칭을 잊고 `krx` 결과를 실제 시세로 읽지 않는다.
+**시세 소스 4종은 전부 실물이다** (PyKRX · yfinance · FDR · CCXT). **다만
+`pipelines/demo.yaml`은 여전히 업비트만 스캔한다** — `symbolUniverse`의 `venue`가
+단수라서다. 소스가 붙었다고 파이프라인이 세 시장을 도는 것으로 착각하지 않는다.
 
 `frontend/` · `docker-compose.yml` · `Dockerfile` · `app/main.py` · `app/api/`는 이미 삭제됐다.
 **되살리지 않는다.**
@@ -42,6 +44,8 @@ uv run ruff check app tests
 uv run marketscan describe          # 전략·파이프라인·마지막 실행
 uv run marketscan run               # dry-run (기본)
 uv run marketscan run --commit      # 부작용 허용
+uv run marketscan ingest            # 수집 계획 + 캐시 커버리지 (기본, 부작용 없음)
+uv run marketscan ingest --commit   # 실제 수집 → ohlcv_cache
 ```
 
 - **저장소는 최상위로 평탄화됐다.** `backend/`는 없다. `cd`하지 않는다.
@@ -94,6 +98,10 @@ uv run marketscan run --commit      # 부작용 허용
 15. **어댑터가 주는 봉 인덱스는 마감 시각이다.** 거래소 API는 대개 **시가 시각**을 주므로
     (CCXT 포함) 어댑터가 읽자마자 옮긴다. 이 변환이 빠지면 `closed_only`가 진행 중인 봉을
     통과시켜, 규칙에 다 걸리지 않은 채로 "신호가 생겼다 사라진다" (§4.4).
+16. **`ohlcv_cache`를 지우지 않는다.** 삭제·정리 명령을 만들지 않는다 (§3.9).
+    이 테이블은 성능 최적화가 아니라 **무료 소스가 막혀도 남는 유일한 자산**이고,
+    특히 폐지 종목의 봉을 지우면 서바이버십 편향이 데이터 레이어에 고착된다 (§4.8).
+    노드는 캐시를 **읽기만** 한다 — `ctx.providers`를 직접 부르지 말고 `ctx.ohlcv`를 쓴다.
 
 ## 백테스트를 대하는 자세
 
@@ -118,7 +126,9 @@ uv run marketscan run --commit      # 부작용 허용
 - **부작용 분기를 노드에 심지 않는다.** `--commit` 여부는 CLI가 `ctx.signals` 배출구를
   갈아 끼우는 것으로 표현한다 (`CollectingSink` ↔ `SqlSignalSink`). 노드마다 분기를 두면
   언젠가 하나를 빠뜨리고, 그날 봉이 소리 없이 소비된다.
-- **미구현을 성공처럼 보이게 하지 않는다.** `ingest`는 `implemented: false`를 내보낸다.
+- **미구현을 성공처럼 보이게 하지 않는다.** 빈 결과와 "아직 안 만들었다"를 구분해 내보낸다.
+- **`ingest`도 기본이 dry-run이다.** 캐시 쓰기는 부작용이므로 `--commit`이 있어야 열린다.
+  읽기는 dry-run에서도 한다 — 읽지 않으면 dry-run이 실제 실행을 예측하지 못한다.
 
 ## 새 전략을 추가할 때
 
@@ -178,3 +188,7 @@ uv run marketscan run --commit      # 부작용 허용
 | 코인 유니버스 대비 랭킹 대상이 적음 | 정상이다. 신규 상장은 `startup_candles`(12-1은 274봉)에 못 미쳐 제외된다 |
 | 테스트가 거래소를 두드림 | `tests/conftest.py`가 격리한다. 노드에 `source: synthetic`을 안 박았는지 본다 |
 | `동적 유니버스는 백테스트에서 쓸 수 없습니다` | 의도된 차단이다 (규칙 14). `instruments`에 직접 적는다 |
+| `ingest --commit`이 매번 0종목을 받아옴 | 정상이다. 이미 그 봉까지 성공한 대상은 건너뛴다 (`--force`로 무시) |
+| 캐시가 있는데 매 실행마다 소스를 부름 | 캐시가 `lookback`보다 짧다. `ingest --lookback N`으로 더 쌓는다 (경고가 남아 있다) |
+| `explain`의 데이터 출처가 `cache` | 정상이다. 괄호 안이 그 구간을 실제로 채운 소스다 |
+| 폐지 종목 수집이 봉을 하나도 못 받음 | `end`가 오늘로 잡혔다. 폐지 종목은 **폐지 시점**을 end로 써야 한다 |

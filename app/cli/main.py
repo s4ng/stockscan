@@ -33,8 +33,10 @@ from app.engine.graph import PipelineValidationError, validate
 from app.engine.runner import NodeStatus, RunResult, RunStatus, execute
 from app.engine.signals import CollectingSink
 from app.engine.state import InMemoryBarState
+from app.ingest import worker
 from app.market.timeframe import JUDGEMENT
 from app.nodes.registry import catalog
+from app.providers.ohlcv_source import CachedSource, DirectSource
 from app.report.run_report import ReportInput, report_path, write_run_report
 from app.schemas.pipeline import ExecutionMode, PipelineSpec
 from app.storage import db, history
@@ -146,6 +148,9 @@ async def _execute(
         signals=sink,
         commit=commit,
     )
+    # 레지스트리는 RunContext가 만든 것을 그대로 쓴다 — 소스 구성의 단일 출처가
+    # 한 곳이어야 테스트가 네트워크를 막을 수 있다 (tests/conftest.py).
+    ctx.ohlcv = _ohlcv_source(ctx.providers, spec, commit)
 
     if commit:
         async with db.session_scope() as session:
@@ -174,9 +179,28 @@ async def _execute(
         closer = getattr(ctx.bar_state, "close", None)
         if closer is not None:
             closer()
-        if commit:
-            await db.dispose()
+        # dry-run도 캐시를 읽느라 엔진을 열었을 수 있다. 엔진이 없으면 무해하다.
+        await db.dispose()
     return result, sink, ctx
+
+
+def _ohlcv_source(providers: Any, spec: PipelineSpec, commit: bool) -> Any:
+    """봉을 어디서 얻을지 고른다 (3.9).
+
+    **쓰기는 `--commit`에서만, 읽기는 언제나.** dry-run이 캐시를 채우면 "읽기 전용
+    실행은 DB 파일조차 만들지 않는다"(규칙 11 / 12.1)가 깨지고, 반대로 dry-run이
+    캐시를 읽지 않으면 `run`과 `run --commit`이 서로 다른 데이터를 보게 되어
+    dry-run이 실제 실행을 예측하지 못한다 — `_bar_state`와 같은 판단이다.
+    """
+    path = sqlite_path(db.database_url())
+    if path is None or (not commit and not path.exists()):
+        return DirectSource(providers, default_adjusted=spec.settings.adjusted)
+    return CachedSource(
+        providers,
+        db.get_sessionmaker(),
+        writable=commit,
+        default_adjusted=spec.settings.adjusted,
+    )
 
 
 def _bar_state(out: Out, pipeline_id: str, commit: bool) -> Any:
@@ -328,37 +352,143 @@ def ingest(
         str | None, typer.Option("--venue", help="수집할 venue (예: upbit, krx)")
     ] = None,
     pipeline: Annotated[Path | None, typer.Option("--pipeline", "-p")] = None,
+    lookback: Annotated[
+        int | None,
+        typer.Option("--lookback", min=2, max=20000, help="봉 개수. 기본은 파이프라인 값"),
+    ] = None,
+    include_delisted: Annotated[
+        bool,
+        typer.Option(
+            "--include-delisted",
+            help="상장폐지 종목도 폐지 시점 기준으로 모읍니다 (서바이버십 방지, krx).",
+        ),
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="이미 이 봉까지 성공한 대상도 다시 받습니다.")
+    ] = False,
+    now: Annotated[str | None, typer.Option("--now", help="기준 시각 ISO8601 UTC")] = None,
     commit: Annotated[bool, typer.Option("--commit", help="캐시에 실제로 씁니다.")] = False,
     as_json: JsonOpt = False,
+    limit: LimitOpt = 20,
 ) -> None:
-    """일봉을 수집해 `ohlcv_cache`에 쌓습니다.
+    """일봉을 수집해 `ohlcv_cache`에 쌓습니다 (ARCHITECTURE.md 3.9).
 
-    ⚠️ **Phase 2에서 구현됩니다.** 지금은 수집 대상만 계산해 보여 줍니다 —
-    캐시 테이블도 Ingestion Worker도 아직 없습니다 (ARCHITECTURE.md 3.9).
+    **기본은 계획만 보여 줍니다.** `--commit`을 붙여야 소스를 호출하고 캐시에 씁니다.
+
+    캐시는 성능 최적화가 아니라 **영구 보관하는 데이터 자산**입니다 — 무료 소스가
+    막혀도 이미 쌓인 이력으로 파이프라인과 백테스트가 계속 돕니다.
     """
     out = Out(as_json)
     spec = _load_spec(out, pipeline)
-    targets = pipeline_file.instruments(spec)
-    if venue:
-        targets = [s for s in targets if s.split(":", 1)[0] == venue]
+    asyncio.run(_ingest(out, spec, venue, lookback, include_delisted, force, now, commit, limit))
 
-    out.warn(
-        "ingest는 아직 수집을 하지 않습니다 (Phase 2). "
-        "현재는 Market Data 노드가 실행 시점에 직접 소스를 호출합니다."
+
+async def _ingest(  # noqa: PLR0913 - CLI 플래그를 그대로 옮긴 것뿐이다
+    out: Out,
+    spec: PipelineSpec,
+    venue: str | None,
+    lookback: int | None,
+    include_delisted: bool,
+    force: bool,
+    now_raw: str | None,
+    commit: bool,
+    limit: int,
+) -> None:
+    ctx = RunContext.create(
+        settings=spec.settings,
+        mode=ExecutionMode.NOTIFY,
+        now=_parse_now(out, now_raw),
+        pipeline_id=spec.pipeline_id,
+        commit=commit,
     )
-    if commit:
-        out.warn("--commit을 붙였지만 쓸 캐시가 아직 없습니다. 아무것도 기록하지 않았습니다.")
 
+    try:
+        plan = await worker.plan_targets(
+            spec, ctx, lookback=lookback, include_delisted=include_delisted
+        )
+        plan = plan.filtered(venue)
+
+        if not commit:
+            await _ingest_plan_only(out, plan, ctx, venue, limit)
+            return
+
+        await db.init_db()
+        report = await worker.ingest(plan, ctx, db.get_sessionmaker(), force=force)
+        _report_ingest(out, plan, report, venue, limit)
+    finally:
+        await ctx.providers.close()
+        await db.dispose()
+
+    if report.failures and report.fetched == 0:
+        # 전부 실패한 것은 소스가 죽었다는 뜻이다. 자동 실행이 이 차이를 알아야 한다.
+        raise typer.Exit(int(ExitCode.DATA))
+
+
+async def _ingest_plan_only(
+    out: Out, plan: Any, ctx: RunContext, venue: str | None, limit: int
+) -> None:
+    """dry-run — 무엇을 모을지와 지금 캐시에 뭐가 있는지만 보여 준다.
+
+    커버리지를 함께 내는 이유는 "왜 아직 신호가 안 나오는가"의 답이 대개
+    **캐시가 얕아서**이기 때문이다. 대상 목록만으로는 그것이 보이지 않는다.
+    """
+    rows: list[dict[str, Any]] = []
+    if sqlite_path(db.database_url()) is not None and _database_exists():
+        rows = await worker.coverage_of(plan, ctx, db.get_sessionmaker())
+    else:
+        rows = [{**t.to_dict(), "bars": 0, "first": None, "last": None} for t in plan.targets]
+
+    for note in plan.notes:
+        out.warn(note)
+    out.warn("dry-run입니다. 소스를 호출하지도 캐시에 쓰지도 않았습니다 (--commit으로 실행).")
+
+    empty = sum(1 for r in rows if not r["bars"])
     out.emit(
         {
             "ok": True,
-            "implemented": False,
-            "phase": 2,
+            "committed": False,
             "venue": venue,
-            "instruments": targets,
-            "note": "ohlcv_cache와 Ingestion Worker는 Phase 2에서 추가됩니다.",
+            "planned": len(plan.targets),
+            "uncached": empty,
+            "targets": rows[:limit],
+            "truncated": max(0, len(rows) - limit),
+            "notes": plan.notes,
         },
-        [f"수집 대상 {len(targets)}종목", *(f"  {s}" for s in targets)],
+        [
+            f"수집 대상 {len(plan.targets)}종목 · 캐시 없음 {empty}종목",
+            "",
+            *table(
+                [
+                    [r["instrument"], r["timeframe"], r["lookback"], r["bars"], r["last"]]
+                    for r in rows[:limit]
+                ],
+                ["종목", "봉", "요청", "캐시", "마지막 봉"],
+            ),
+        ],
+    )
+
+
+def _report_ingest(out: Out, plan: Any, report: Any, venue: str | None, limit: int) -> None:
+    for note in plan.notes:
+        out.warn(note)
+    for line in report.conflicts[:limit]:
+        # 3.8 정합성 검증. 같은 봉을 두 소스가 다르게 준 것은 조용히 넘길 일이 아니다.
+        out.warn(line)
+    for instrument, error in report.failures[:limit]:
+        out.warn(f"{instrument}: {error}")
+    if report.empty:
+        out.warn(
+            f"봉을 하나도 받지 못한 종목 {len(report.empty)}건: "
+            f"{', '.join(report.empty[:10])}"
+        )
+
+    out.emit(
+        {"ok": True, "committed": True, "venue": venue, **report.to_dict()},
+        [
+            f"수집 {report.fetched}/{report.planned}종목 "
+            f"(이미 최신 {report.skipped_fresh} · 실패 {len(report.failures)})",
+            f"캐시 신규 {report.inserted}봉 · 갱신 {report.updated}봉",
+        ],
     )
 
 
@@ -559,7 +689,7 @@ def explain(
         f"순위  {strategy['features'].get('rank')} / {strategy['features'].get('universe_size')}"
         f"  (상위 {strategy['features'].get('percentile')}%)"
         f"{_excluded_note(strategy['features'])}",
-        f"데이터 {payload['data']['source']} · adjusted={payload['data']['adjusted']}"
+        f"데이터 {_data_origin(payload['data'])} · adjusted={payload['data']['adjusted']}"
         f" · fallback_from={payload['data']['fallback_from']}",
         f"실행  {payload['run']['run_id']} · {payload['run']['status']}",
         f"판정  acted={payload['acted']}",
@@ -612,6 +742,9 @@ async def _explain(out: Out, signal_id: int) -> dict[str, Any] | None:
             "source": meta.get("source"),
             "adjusted": meta.get("adjusted"),
             "fallback_from": meta.get("fallback_from", []),
+            # 캐시에서 읽었으면 `source`가 'cache'가 되어 원래 출처를 잃는다.
+            # 그러면 "어느 소스로 계산된 판단인가"에 답할 수 없다 (4.7).
+            "cached_sources": meta.get("cached_sources", []),
         },
         "run": {
             "run_id": row.run_id,
@@ -761,6 +894,17 @@ def _output_count(node: Any) -> int | None:
     """노드의 main 출력 건수. 실행되지 않았으면 None."""
     main = (node.outputs or {}).get("main")
     return main.get("count") if isinstance(main, dict) else None
+
+
+def _data_origin(data: dict[str, Any]) -> str:
+    """봉이 어디서 왔는가. 캐시면 **그 구간을 채운 원래 소스까지** 밝힌다.
+
+    `cache`만 보여 주면 "어느 소스로 계산된 판단인가"에 답할 수 없고, 그건
+    폴백 가시화(3.4)를 캐시가 도로 가려 버리는 것이다.
+    """
+    source = data.get("source")
+    cached = data.get("cached_sources") or []
+    return f"{source}({', '.join(cached)})" if cached else str(source)
 
 
 def _load_spec(out: Out, pipeline: Path | None) -> PipelineSpec:

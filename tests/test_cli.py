@@ -399,8 +399,52 @@ def test_signals_ack_without_a_database_exits_three(workspace: Path):
     assert not (workspace / "test.db").exists()
 
 
-def test_ingest_is_honest_about_being_unimplemented(workspace: Path):
-    """미구현을 성공처럼 보이게 하지 않는다."""
-    body = payload(invoke("ingest", "--json"))
-    assert body["implemented"] is False
-    assert body["phase"] == 2
+def test_ingest_without_commit_writes_nothing(workspace: Path):
+    """계획만 보여 준다. 소스도 캐시도 건드리지 않는다 (규칙 11)."""
+    body = payload(invoke("ingest", "--now", NOW, "--json"))
+    assert body["committed"] is False
+    assert body["planned"] == 3
+    assert body["uncached"] == 3  # 아직 아무것도 안 쌓였다
+    assert not (workspace / "test.db").exists()
+
+
+def test_ingest_commit_fills_the_cache(workspace: Path):
+    body = payload(invoke("ingest", "--now", NOW, "--commit", "--json"))
+    assert body["committed"] is True
+    assert body["fetched"] == 3
+    assert body["inserted"] > 0
+    assert body["failures"] == []
+    assert (workspace / "test.db").exists()
+
+    # 두 번째 실행은 같은 봉을 다시 받지 않는다 — 무료 소스를 하루에 한 번만 밟는다.
+    again = payload(invoke("ingest", "--now", NOW, "--commit", "--json"))
+    assert again["skipped_fresh"] == 3
+    assert again["fetched"] == 0
+
+
+def test_ingest_venue_filter(workspace: Path):
+    body = payload(invoke("ingest", "--now", NOW, "--venue", "krx", "--json"))
+    assert body["planned"] == 1
+    assert body["targets"][0]["instrument"] == "krx:005930"
+
+
+def test_cache_only_run_needs_an_ingest_first(workspace: Path):
+    """★ 3.9의 존재 이유 — 수집해 두면 외부 호출 없이 실행이 돈다.
+
+    `cache: only`는 소스를 아예 부르지 않으므로, 수집 전과 후의 차이가 곧
+    "캐시가 실제로 실행을 떠받쳤는가"의 증거다.
+    """
+    pipeline = json.loads(json.dumps(PIPELINE))
+    pipeline["nodes"][0]["params"]["cache"] = "only"
+    path = workspace / "cache_only.json"
+    path.write_text(json.dumps(pipeline, ensure_ascii=False), encoding="utf-8")
+
+    before = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
+    assert before["ok"] is True  # 빈 결과는 실패가 아니다 (4.1)
+    assert before["signal_count"] == 0
+
+    invoke("ingest", "-p", str(path), "--now", NOW, "--commit")
+    after = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
+
+    assert after["signal_count"] > 0
+    assert next(n["items"] for n in after["nodes"] if n["node_id"] == "data") == 3

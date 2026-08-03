@@ -4,9 +4,14 @@
   - **closed_only**: 미완성 봉을 잘라내 신호가 생겼다 사라지는 현상을 막는다 (4.4)
   - **skip_stale**:  직전 실행과 같은 봉이면 제외한다. 코인+주식 혼합 파이프라인에서
                      장 마감 중인 종목이 같은 신호를 매번 재발생시키는 것을 막는다 (3.5)
+
+봉은 `ctx.ohlcv`에서 온다. **이 노드는 뒤에 `ohlcv_cache`가 있는지 모른다** —
+3.9가 "노드는 캐시 구현을 모른다"로 인터페이스를 고정했기 때문이다.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +23,7 @@ from app.market.timeframe import normalize
 from app.nodes.base import BaseNode, NodeError
 from app.nodes.inputs.symbol_universe import UNIVERSE_KEY
 from app.nodes.registry import register
+from app.providers.ohlcv_source import CacheMissError
 from app.providers.registry import AUTO
 from app.schemas.pipeline import MAIN
 
@@ -37,6 +43,13 @@ class MarketDataParams(BaseModel):
         default=True, description="직전 실행과 같은 봉이면 제외 (Fresh Bar Gate)"
     )
     source: str = Field(default=AUTO, description="'auto'면 라우팅 표를 따름. 또는 Connection ID")
+    cache: Literal["auto", "off", "only"] = Field(
+        default="auto",
+        description=(
+            "auto=캐시 우선·부족하면 소스 / off=항상 소스 / only=캐시만(외부 호출 없음). "
+            "쓰기는 --commit에서만 일어납니다."
+        ),
+    )
 
 
 @register
@@ -63,6 +76,8 @@ class MarketDataNode(BaseNode):
         stale: list[str] = []
         no_bar: list[str] = []
         fallbacks: list[str] = []
+        from_cache: list[str] = []
+        missing: list[str] = []
 
         for raw in targets:
             instrument = InstrumentRef.parse(raw)
@@ -82,9 +97,23 @@ class MarketDataNode(BaseNode):
                     stale.append(instrument.key)
                     continue
 
-            result = await ctx.providers.fetch_ohlcv(
-                instrument, timeframe, as_of, params.lookback, source=params.source
-            )
+            assert ctx.ohlcv is not None  # RunContext.__post_init__이 채운다
+            try:
+                result = await ctx.ohlcv.load(
+                    instrument,
+                    timeframe,
+                    as_of,
+                    params.lookback,
+                    source=params.source,
+                    policy=params.cache,
+                )
+            except CacheMissError as exc:
+                # cache=only에서 커버리지가 모자란 것은 **명시적 거부**다 (4.8).
+                # 조용히 소스를 부르면 "외부 호출을 하지 않는다"는 전제가 깨진다.
+                missing.append(instrument.key)
+                ctx.log.warning(str(exc))
+                continue
+
             df = validate_ohlcv(result.df)
             if params.closed_only:
                 df = df[df.index <= as_of]
@@ -96,8 +125,14 @@ class MarketDataNode(BaseNode):
                 # 그대로 베끼면 조정가를 받은 것처럼 남는다. 이 값은 캐시 키에
                 # 들어가므로(규칙 8) 틀리면 조정가/비조정가가 섞여 지표가 조용히
                 # 어긋나고 원인 추적이 불가능해진다.
-                "adjusted": _effective_adjusted(ctx, result.provider_id),
+                "adjusted": result.adjusted,
             }
+            for note in result.notes:
+                ctx.log.warning(note)
+            if result.from_cache:
+                # 어느 소스가 채운 구간인지가 남아야 정합성 문제를 되짚을 수 있다.
+                meta["cached_sources"] = list(result.cached_sources)
+                from_cache.append(instrument.key)
             if result.used_fallback:
                 # 폴백은 소스가 바뀌었다는 뜻이다. 지표 불연속의 원인을 사후에
                 # 추적하려면 어느 종목이 어느 소스로 대체됐는지가 남아야 한다.
@@ -122,6 +157,13 @@ class MarketDataNode(BaseNode):
             ctx.log.info(f"새로 마감된 봉이 없어 제외: {', '.join(stale)}")
         if no_bar:
             ctx.log.warning(f"마감된 봉을 찾지 못함: {', '.join(no_bar)}")
+        if from_cache:
+            ctx.log.info(f"{len(from_cache)}종목을 ohlcv_cache에서 읽었습니다 (외부 호출 없음)")
+        if missing:
+            ctx.log.warning(
+                f"캐시 부족으로 제외 {len(missing)}종목 — "
+                f"`marketscan ingest --commit`으로 봉을 쌓으세요."
+            )
         if fallbacks:
             ctx.log.warning(
                 f"소스 폴백 발동 — {' | '.join(fallbacks)}. "
@@ -132,23 +174,6 @@ class MarketDataNode(BaseNode):
         # 유니버스 산출 근거를 하류로 흘려보낸다 — 리포트와 node_runs가 "그날 몇
         # 종목을 훑었는가"를 알아야 랭킹의 표본 수를 해석할 수 있다.
         return {MAIN: Bundle(items, dict(upstream.context))}
-
-
-def _effective_adjusted(ctx: RunContext, provider_id: str) -> bool:
-    """이 소스가 실제로 수정주가를 준 것인가.
-
-    `always`/`never`는 설정과 무관하게 소스가 결정한다. `optional`일 때만
-    파이프라인 설정이 의미를 갖는다.
-    """
-    try:
-        capability = ctx.providers.get(provider_id).capabilities.adjusted
-    except Exception:  # noqa: BLE001 - 출처 기록이 수집을 실패시키면 안 된다
-        return ctx.settings.adjusted
-    if capability == "always":
-        return True
-    if capability == "never":
-        return False
-    return ctx.settings.adjusted
 
 
 def _targets(params: MarketDataParams, upstream: Bundle) -> list[str]:
