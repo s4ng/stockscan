@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.formatting import format_change, format_price
 from app.engine.runner import RunResult
 
 #: 리포트에 실을 최대 신호 수. 넘으면 잘라내고 그 사실을 리포트에 적는다.
@@ -124,22 +125,25 @@ def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
     body = "\n".join(
         "<tr>"
         + "".join(
-            f"<td>{_cell(value)}</td>"
-            for value in (
-                row.get("instrument"),
+            f"<td>{cell}</td>"
+            for cell in (
+                _cell(row.get("instrument")),
                 # `005930`만으로는 무슨 회사인지 알 수 없다. 소스가 준 이름을 쓴다.
-                row.get("display_name"),
+                _cell(row.get("display_name")),
+                # 판단한 봉의 종가와 그 봉의 등락률. "지금 시세"가 아니다 —
+                # 마감된 봉으로만 판단하므로(4.4) 표시도 그 봉을 따라간다.
+                _price_cell(row.get("close"), row.get("change_pct")),
                 # 어느 시장 안에서 매긴 순위인가 (규칙 17). 이게 없으면 "1 / 39"의
                 # 39가 무엇의 39인지 알 수 없다.
-                (row.get("features") or {}).get("rank_pool"),
-                row.get("timeframe"),
-                row.get("as_of"),
-                (row.get("features") or {}).get("rank"),
-                (row.get("features") or {}).get("universe_size"),
-                (row.get("features") or {}).get("percentile"),
-                (row.get("features") or {}).get("score"),
-                row.get("strategy_id"),
-                (row.get("strategy_sha256") or "")[:12],
+                _cell((row.get("features") or {}).get("rank_pool")),
+                _cell(row.get("timeframe")),
+                _cell(row.get("as_of")),
+                _cell((row.get("features") or {}).get("rank")),
+                _cell((row.get("features") or {}).get("universe_size")),
+                _cell((row.get("features") or {}).get("percentile")),
+                _cell((row.get("features") or {}).get("score")),
+                _cell(row.get("strategy_id")),
+                _cell((row.get("strategy_sha256") or "")[:12]),
             )
         )
         + "</tr>"
@@ -152,8 +156,8 @@ def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
     )
     return f"""<div class="scroll"><table>
 <thead><tr>
-<th>종목</th><th>이름</th><th>시장</th><th>봉</th><th>as_of</th><th>순위</th>
-<th>유니버스</th><th>백분위</th><th>점수</th><th>전략</th><th>소스 해시</th>
+<th>종목</th><th>이름</th><th>종가 (등락)</th><th>시장</th><th>봉</th><th>as_of</th>
+<th>순위</th><th>유니버스</th><th>백분위</th><th>점수</th><th>전략</th><th>소스 해시</th>
 </tr></thead>
 <tbody>
 {body}
@@ -183,11 +187,30 @@ def _logs(lines: list[str]) -> str:
 
 
 def _cell(value: Any) -> str:
-    if value is None:
+    if value is None or value == "":
         return "-"
     if isinstance(value, float):
         return html.escape(f"{value:,.6g}")
     return html.escape(str(value))
+
+
+def _price_cell(close: Any, change: Any) -> str:
+    """`239,500 (+2.34%)` — 등락률에만 색을 입힌다.
+
+    **상승이 빨강, 하락이 파랑이다.** 국내 HTS·증권사 관례를 따른다 — 서구
+    관례(상승 초록)와 반대라 뒤집으면 순간적으로 정반대로 읽힌다. 가격 자체는
+    색을 주지 않는다: 색이 넓게 깔리면 어느 쪽이 신호인지 흐려진다.
+    """
+    text = format_price(close if isinstance(close, int | float) else None)
+    if not text:
+        return "-"
+    if not isinstance(change, int | float):
+        return html.escape(text)
+    tone = "up" if change > 0 else "down" if change < 0 else "flat"
+    return (
+        f"{html.escape(text)} "
+        f'<span class="chg {tone}">{html.escape(format_change(change))}</span>'
+    )
 
 
 def _banner(label: str, message: str) -> str:
@@ -219,6 +242,12 @@ th, td { text-align:left; padding:.45rem .7rem; border-bottom:1px solid var(--li
 th { background:var(--head); font-weight:600; }
 td:last-child { white-space:normal; color:var(--muted); }
 .empty, .note { color:var(--muted); }
+/* 상승 빨강 · 하락 파랑 — 국내 HTS 관례다. 서구 관례와 반대라 뒤집으면
+   순간적으로 정반대로 읽힌다. */
+.chg { font-variant-numeric:tabular-nums; }
+.chg.up { color:#d32f2f; }
+.chg.down { color:#1565c0; }
+.chg.flat { color:var(--muted); }
 .s-error { color:#d33; font-weight:600; }
 .s-skipped { color:var(--muted); }
 footer { margin-top:2.5rem; color:var(--muted); font-size:.85rem;

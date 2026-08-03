@@ -28,6 +28,7 @@ from app.cli import pipeline_file
 from app.cli.output import ExitCode, Out, table
 from app.cli.templates import STRATEGY_TEMPLATE
 from app.core.config import get_settings
+from app.core.formatting import format_price_change
 from app.engine.context import RunContext
 from app.engine.graph import PipelineValidationError, validate
 from app.engine.runner import NodeStatus, RunResult, RunStatus, execute
@@ -347,6 +348,7 @@ def _report_run(
             s["instrument"],
             # `005930`만으로는 무슨 회사인지 알 수 없다. 소스가 준 이름을 쓴다.
             s.get("display_name") or "",
+            format_price_change(s.get("close"), s.get("change_pct")),
             s["timeframe"],
             s["as_of"],
             s["features"].get("rank_pool"),
@@ -355,7 +357,9 @@ def _report_run(
         ]
         for s in signals
     ]
-    signal_table = table(rows, ["종목", "이름", "봉", "as_of", "시장", "순위", "전략"])
+    signal_table = table(
+        rows, ["종목", "이름", "종가 (등락)", "봉", "as_of", "시장", "순위", "전략"]
+    )
     human.extend(signal_table or ["신호 0건 — 정상입니다 (빈 결과와 실패는 다릅니다)."])
 
     if written:
@@ -717,6 +721,11 @@ def explain(
     human = [
         f"{payload['instrument']}{_name_suffix(payload)} · {payload['as_of']}"
         f" ({payload['timeframe']})",
+        *(
+            [f"종가  {format_price_change(payload['close'], payload['change_pct'])}"]
+            if payload.get("close") is not None
+            else []
+        ),
         f"전략  {strategy['id']} @ {(strategy['sha256'] or '')[:12]}",
         f"순위  {strategy['features'].get('rank')} / {strategy['features'].get('universe_size')}"
         f"{_rank_pool(strategy['features'])}"
@@ -776,6 +785,8 @@ async def _explain(out: Out, signal_id: int) -> dict[str, Any] | None:
         "signal_id": row.id,
         "instrument": row.instrument,
         "display_name": meta.get("display_name"),
+        "close": meta.get("close"),
+        "change_pct": meta.get("change_pct"),
         "timeframe": row.timeframe,
         "as_of": row.as_of.isoformat(),
         "kind": row.kind,

@@ -53,6 +53,8 @@ class SignalDraft:
             "dedup_key": self.dedup_key,
             "instrument": self.instrument,
             "display_name": self.meta.get("display_name"),
+            "close": self.meta.get("close"),
+            "change_pct": self.meta.get("change_pct"),
             "venue": self.venue,
             "timeframe": self.timeframe,
             "as_of": self.as_of.isoformat(),
@@ -111,6 +113,15 @@ def draft_from_item(
     # `review`가 이름을 얻으려고 종목 목록을 다시 조회해야 한다.
     if item.instrument.display_name and item.instrument.display_name != item.instrument.symbol:
         meta["display_name"] = item.instrument.display_name
+
+    # ★ **봉이 버려지는 곳이 여기다.** DataFrame은 신호로 옮기지 않으므로(12.4),
+    # 표시에 필요한 사실은 이 지점에서 꺼내 두지 않으면 영영 잃는다. 전략이 아니라
+    # 여기서 채우는 이유는 **모든 전략에 공통인 봉의 사실**이기 때문이다 — 전략마다
+    # `close`를 features에 넣기로 약속하면 언젠가 하나가 빠뜨린다.
+    if item.last_close is not None:
+        meta["close"] = item.last_close
+    if item.change_pct is not None:
+        meta["change_pct"] = item.change_pct
 
     return SignalDraft(
         run_id=run_id,

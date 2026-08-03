@@ -61,6 +61,22 @@ class Item:
             return None
         return float(self.ohlcv["close"].iloc[-1])
 
+    @property
+    def change_pct(self) -> float | None:
+        """**판단한 봉의** 직전 봉 대비 등락률. 봉이 하나뿐이면 None.
+
+        "지금 시세" 대비가 아니다 — 이 시스템은 마감된 봉으로만 판단하므로(4.4)
+        표시도 그 봉을 따라가야 한다. 장중 시세를 섞으면 신호의 근거와 화면에
+        보이는 값이 어긋난다.
+        """
+        if self.ohlcv.empty or "close" not in self.ohlcv or len(self.ohlcv) < 2:
+            return None
+        close = self.ohlcv["close"]
+        previous = float(close.iloc[-2])
+        if previous == 0:
+            return None
+        return float(close.iloc[-1]) / previous - 1
+
     def summary(self) -> dict[str, Any]:
         """node_runs에 저장할 요약. DataFrame 원본은 저장하지 않는다."""
         return {

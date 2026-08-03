@@ -179,3 +179,96 @@ def test_report_keeps_every_signal_even_when_stdout_is_limited(workspace: Path):
     assert len(body["signals"]) == 1
     assert body["truncated"] >= 1
     assert text.count("<tr>") > len(body["signals"]) + 1  # 신호 여러 건 + 노드 행
+
+
+# ------------------------------------------------------------------ 가격 표시
+def test_price_format_adapts_to_magnitude():
+    """★ 한 유니버스에 삼성전자 239,500원과 알트코인 0.00000123이 함께 들어온다.
+
+    자릿수를 고정하면 한쪽이 반드시 못 읽힌다 — 코인은 `0.00`으로 찌그러지고
+    주식은 소수점이 붙는다.
+    """
+    from app.core.formatting import format_price, format_price_change
+
+    assert format_price(239500) == "239,500"
+    assert format_price(1567000.0) == "1,567,000"
+    assert format_price(308.91) == "308.91"
+    assert format_price(0.00000123) == "0.00000123"  # 지수 표기가 아니어야 한다
+    assert format_price(0) == "0"
+    assert format_price(None) == ""
+
+    assert format_price_change(239500, 0.0234) == "239,500 (+2.34%)"
+    assert format_price_change(308.91, -0.0051) == "308.91 (-0.51%)"
+    assert format_price_change(100, None) == "100.00"  # 등락률을 모르면 가격만
+
+
+def test_change_pct_uses_the_judged_bar_not_live_price():
+    """마감된 봉으로만 판단하므로(4.4) 표시도 그 봉을 따라가야 한다."""
+    import pandas as pd
+
+    from app.engine.types import Item
+    from app.market.instrument import InstrumentRef
+
+    index = pd.DatetimeIndex(pd.date_range("2026-08-01", periods=3, tz="UTC"), name="time")
+    frame = pd.DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0],
+            "high": [100.0, 100.0, 100.0],
+            "low": [100.0, 100.0, 100.0],
+            "close": [100.0, 200.0, 220.0],
+            "volume": [1.0, 1.0, 1.0],
+        },
+        index=index,
+    )
+    item = Item(
+        instrument=InstrumentRef.parse("krx:005930"),
+        timeframe="1d",
+        as_of=index[-1].to_pydatetime(),
+        ohlcv=frame,
+    )
+
+    assert item.last_close == 220.0
+    assert item.change_pct == pytest.approx(0.1)  # 200 → 220
+
+
+def test_single_bar_has_no_change():
+    import pandas as pd
+
+    from app.engine.types import Item
+    from app.market.instrument import InstrumentRef
+
+    index = pd.DatetimeIndex(pd.date_range("2026-08-01", periods=1, tz="UTC"), name="time")
+    frame = pd.DataFrame(
+        {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0]},
+        index=index,
+    )
+    item = Item(
+        instrument=InstrumentRef.parse("krx:005930"),
+        timeframe="1d",
+        as_of=index[-1].to_pydatetime(),
+        ohlcv=frame,
+    )
+
+    assert item.change_pct is None
+
+
+def test_change_is_coloured_red_up_blue_down():
+    """★ 상승 빨강 · 하락 파랑 — 국내 HTS 관례다. 뒤집으면 정반대로 읽힌다."""
+    from app.report.run_report import _price_cell
+
+    up = _price_cell(239500, 0.0234)
+    down = _price_cell(308.91, -0.0051)
+    flat = _price_cell(100, 0.0)
+
+    assert 'class="chg up"' in up and "+2.34%" in up
+    assert 'class="chg down"' in down and "-0.51%" in down
+    assert 'class="chg flat"' in flat
+    # 가격 자체에는 색을 주지 않는다 — 넓게 깔리면 어느 쪽이 신호인지 흐려진다
+    assert up.startswith("239,500 <span")
+
+
+def test_price_cell_without_change_is_plain():
+    from app.report.run_report import _price_cell
+
+    assert _price_cell(100, None) == "100.00"
+    assert _price_cell(None, None) == "-"
