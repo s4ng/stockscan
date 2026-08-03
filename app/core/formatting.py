@@ -12,6 +12,9 @@ CLI 표·HTML 리포트가 함께 쓴다. 두 곳에 각각 두면 같은 종목
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 #: 이 값 이상이면 소수점을 버린다. 주식·원화 코인이 여기 걸린다.
 _INTEGER_FROM = 1000
 
@@ -49,3 +52,29 @@ def format_price_change(value: float | int | None, ratio: float | None) -> str:
         return ""
     change = format_change(ratio)
     return f"{price} ({change})" if change else price
+
+
+# --------------------------------------------------------------------------- 시각
+DEFAULT_TIMEZONE = "Asia/Seoul"
+
+
+def format_time(value: datetime | str | None, tz: str = DEFAULT_TIMEZONE) -> str:
+    """UTC로 저장된 시각을 **표시용 지역 시각**으로 (`2026-08-03 15:30`).
+
+    ★ **저장은 언제나 tz-aware UTC이고 변환은 표시할 때만 한다** (규칙 5).
+    여기가 그 "표시할 때"의 유일한 지점이라, 화면마다 다른 시각이 보이는 일이 없다.
+
+    오프셋(`+09:00`)은 붙이지 않는다 — 개인용 단일 사용자 도구라 표시 타임존이
+    하나뿐이고, 매 행에 같은 접미사가 붙으면 표만 넓어진다. 대신 **열 이름에
+    타임존을 적어** 어느 기준인지 한 번만 밝힌다.
+    """
+    if value is None:
+        return ""
+    moment = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return moment.astimezone(ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M")
+
+
+def timezone_label(tz: str = DEFAULT_TIMEZONE) -> str:
+    """열 이름에 붙일 짧은 표기 (`KST`). 모르면 타임존 이름 그대로."""
+    abbreviation = datetime.now(ZoneInfo(tz)).strftime("%Z")
+    return abbreviation if abbreviation and not abbreviation.startswith("+") else tz

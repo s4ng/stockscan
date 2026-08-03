@@ -272,3 +272,59 @@ def test_price_cell_without_change_is_plain():
 
     assert _price_cell(100, None) == "100.00"
     assert _price_cell(None, None) == "-"
+
+
+# --------------------------------------------------------------------- 시각 표시
+def test_time_is_shown_in_the_user_timezone():
+    """★ 저장은 UTC, 변환은 표시할 때만 (규칙 5). 여기가 그 유일한 지점이다."""
+    from datetime import UTC, datetime
+
+    from app.core.formatting import format_time, timezone_label
+
+    krx_close = datetime(2026, 8, 3, 6, 30, tzinfo=UTC)
+    us_close = datetime(2026, 8, 3, 20, 0, tzinfo=UTC)
+
+    assert format_time(krx_close) == "2026-08-03 15:30"
+    # ⚠️ 미국 8/3 세션은 KST로 **다음 날 새벽**에 닫힌다. 값은 맞지만 같은 거래일의
+    # 국내 종목보다 하루 뒤로 보여서, 리포트에 그 사실을 적어 둔다.
+    assert format_time(us_close) == "2026-08-04 05:00"
+    assert timezone_label("Asia/Seoul") == "KST"
+
+
+def test_time_accepts_the_iso_strings_signals_carry():
+    from app.core.formatting import format_time
+
+    assert format_time("2026-08-03T06:30:00+00:00") == "2026-08-03 15:30"
+    assert format_time(None) == ""
+
+
+def test_report_labels_the_timezone_in_the_header(tmp_path: Path):
+    """열 이름에 타임존을 한 번만 적는다 — 매 행에 `+09:00`을 붙이면 표만 넓어진다."""
+    result = RunResult(
+        run_id="run_tz",
+        pipeline_id="p",
+        mode="notify",
+        now="2026-08-03T21:00:00+00:00",
+        status=RunStatus.SUCCESS,
+        nodes=[],
+    )
+    signal = {
+        "instrument": "krx:005930",
+        "display_name": "삼성전자",
+        "as_of": "2026-08-03T06:30:00+00:00",
+        "timeframe": "1d",
+        "close": 239500.0,
+        "change_pct": 0.0234,
+        "features": {"rank": 1, "percentile": 0.5},
+        "strategy_id": "s",
+        "strategy_sha256": "abc",
+    }
+    path = write_run_report(
+        ReportInput(result=result, signals=[signal], committed=False), tmp_path / "r.html"
+    )
+    html_text = path.read_text(encoding="utf-8")
+
+    assert "봉 마감 (KST)" in html_text
+    assert "2026-08-03 15:30" in html_text
+    assert "+00:00" not in html_text  # 원본 UTC 표기가 새어 나오지 않는다
+    assert "미국장은 한국 시각으로 다음 날 새벽" in html_text

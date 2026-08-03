@@ -28,7 +28,11 @@ from app.cli import pipeline_file
 from app.cli.output import ExitCode, Out, table
 from app.cli.templates import STRATEGY_TEMPLATE
 from app.core.config import get_settings
-from app.core.formatting import format_price_change
+from app.core.formatting import (
+    format_price_change,
+    format_time,
+    timezone_label,
+)
 from app.engine.context import RunContext
 from app.engine.graph import PipelineValidationError, validate
 from app.engine.runner import NodeStatus, RunResult, RunStatus, execute
@@ -40,7 +44,7 @@ from app.nodes.registry import catalog
 from app.providers.ohlcv_source import CachedSource, DirectSource
 from app.providers.universe_source import CachedUniverse, DirectUniverse
 from app.report.run_report import ReportInput, report_path, write_run_report
-from app.schemas.pipeline import ExecutionMode, PipelineSpec
+from app.schemas.pipeline import ExecutionMode, PipelineSettings, PipelineSpec
 from app.storage import db, history
 from app.storage.bar_state import SqlBarState, sqlite_path
 from app.storage.history import SqlSignalSink
@@ -284,6 +288,7 @@ def _write_report(
                 signals=signals,
                 committed=ctx.commit,
                 pipeline_name=spec.name,
+                user_timezone=spec.settings.user_timezone,
             ),
             path,
         )
@@ -338,9 +343,12 @@ def _report_run(
         ],
     }
 
+    # 저장은 UTC, 표시만 사용자 타임존 (규칙 5).
+    tz = spec.settings.user_timezone
+    label = timezone_label(tz)
     human = [
         f"실행 {result.run_id} · {result.pipeline_id} · mode={result.mode} · {result.status}",
-        f"기준 시각 {result.now}",
+        f"기준 시각 {format_time(result.now, tz)} ({label})",
         "",
     ]
     rows = [
@@ -350,7 +358,7 @@ def _report_run(
             s.get("display_name") or "",
             format_price_change(s.get("close"), s.get("change_pct")),
             s["timeframe"],
-            s["as_of"],
+            format_time(s["as_of"], tz),
             s["features"].get("rank_pool"),
             s["features"].get("rank"),
             s["strategy_id"],
@@ -358,7 +366,8 @@ def _report_run(
         for s in signals
     ]
     signal_table = table(
-        rows, ["종목", "이름", "종가 (등락)", "봉", "as_of", "시장", "순위", "전략"]
+        rows,
+        ["종목", "이름", "종가 (등락)", "봉", f"봉 마감 ({label})", "시장", "순위", "전략"],
     )
     human.extend(signal_table or ["신호 0건 — 정상입니다 (빈 결과와 실패는 다릅니다)."])
 
@@ -627,9 +636,20 @@ def signals_list(
     out = Out(as_json)
     rows = asyncio.run(_query_signals(out, strategy, venue, acted, limit))
     payload = {"ok": True, "count": len(rows), "signals": rows}
+    tz = _display_tz()
     human = table(
-        [[r["id"], r["instrument"], r["as_of"], r["strategy_id"], r["acted"]] for r in rows],
-        ["id", "종목", "as_of", "전략", "실행"],
+        [
+            [
+                r["id"],
+                r["instrument"],
+                r.get("display_name") or "",
+                format_time(r["as_of"], tz),
+                r["strategy_id"],
+                r["acted"],
+            ]
+            for r in rows
+        ],
+        ["id", "종목", "이름", f"봉 마감 ({timezone_label(tz)})", "전략", "실행"],
     ) or ["신호가 없습니다. `marketscan run --commit`으로 기록됩니다."]
     out.emit(payload, human)
 
@@ -719,8 +739,9 @@ def explain(
 
     strategy = payload["strategy"]
     human = [
-        f"{payload['instrument']}{_name_suffix(payload)} · {payload['as_of']}"
-        f" ({payload['timeframe']})",
+        f"{payload['instrument']}{_name_suffix(payload)} · "
+        f"봉 마감 {format_time(payload['as_of'], _display_tz())} ({_display_tz_label()}) "
+        f"· {payload['timeframe']}",
         *(
             [f"종가  {format_price_change(payload['close'], payload['change_pct'])}"]
             if payload.get("close") is not None
@@ -737,6 +758,20 @@ def explain(
         f"판정  acted={payload['acted']}",
     ]
     out.emit(payload, human)
+
+
+def _display_tz() -> str:
+    """읽기 전용 명령의 표시 타임존.
+
+    `explain`·`signals`는 파이프라인을 읽지 않으므로 그 설정을 볼 수 없다.
+    `PipelineSettings`의 기본값을 그대로 쓴다 — 표시 규약의 출처를 두 곳에 두면
+    같은 신호가 명령마다 다른 시각으로 보인다.
+    """
+    return PipelineSettings().user_timezone
+
+
+def _display_tz_label() -> str:
+    return timezone_label(_display_tz())
 
 
 def _name_suffix(payload: dict[str, Any]) -> str:

@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
-from app.core.formatting import format_change, format_price
+from app.core.formatting import (
+    DEFAULT_TIMEZONE,
+    format_change,
+    format_price,
+    format_time,
+    timezone_label,
+)
 from app.engine.runner import RunResult
 
 #: 리포트에 실을 최대 신호 수. 넘으면 잘라내고 그 사실을 리포트에 적는다.
@@ -31,6 +37,8 @@ class ReportInput:
     signals: list[dict[str, Any]]
     committed: bool
     pipeline_name: str = ""
+    user_timezone: str = DEFAULT_TIMEZONE
+    """표시용 타임존. 저장은 언제나 UTC다 (규칙 5)."""
 
 
 def report_path(run_id: str, *, committed: bool, directory: Path | None = None) -> Path:
@@ -77,6 +85,8 @@ def _rank_key(row: dict[str, Any]) -> tuple[float, str]:
 
 def _render(data: ReportInput) -> str:
     result = data.result
+    tz = data.user_timezone
+    label = timezone_label(tz)
     ordered = sorted(data.signals, key=_rank_key)
     rows = ordered[:MAX_ROWS]
     truncated = max(0, len(data.signals) - MAX_ROWS)
@@ -103,17 +113,18 @@ def _render(data: ReportInput) -> str:
         run_id=html.escape(result.run_id),
         mode=html.escape(result.mode),
         status=html.escape(str(result.status)),
-        as_of=html.escape(result.now),
+        as_of=html.escape(format_time(result.now, tz)),
+        tz=html.escape(label),
         committed="예" if data.committed else "아니오 (dry-run)",
-        generated=datetime.now(UTC).isoformat(timespec="seconds"),
+        generated=html.escape(format_time(datetime.now(UTC), tz)),
         banner=banner,
         signal_count=len(data.signals),
-        signal_table=_signal_table(rows, truncated),
+        signal_table=_signal_table(rows, truncated, tz, label),
         node_table=_node_table(result),
     )
 
 
-def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
+def _signal_table(rows: list[dict[str, Any]], truncated: int, tz: str, label: str) -> str:
     if not rows:
         # 신호 0건은 실패가 아니다 (4.1). 리포트에서도 그렇게 읽혀야 한다.
         return (
@@ -137,7 +148,7 @@ def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
                 # 39가 무엇의 39인지 알 수 없다.
                 _cell((row.get("features") or {}).get("rank_pool")),
                 _cell(row.get("timeframe")),
-                _cell(row.get("as_of")),
+                _cell(format_time(row.get("as_of"), tz)),
                 _cell((row.get("features") or {}).get("rank")),
                 _cell((row.get("features") or {}).get("universe_size")),
                 _cell((row.get("features") or {}).get("percentile")),
@@ -154,9 +165,17 @@ def _signal_table(rows: list[dict[str, Any]], truncated: int) -> str:
         if truncated
         else ""
     )
+    # 미국 세션은 KST로 다음 날 새벽에 닫힌다. 값은 맞지만 같은 거래일의 국내
+    # 종목보다 하루 뒤로 보여서, 적어 두지 않으면 데이터가 어긋난 것으로 읽힌다.
+    note += (
+        f'<p class="note">시각은 모두 {label} 기준이며 <strong>봉이 마감한 순간</strong>입니다 '
+        f"— 미국장은 한국 시각으로 다음 날 새벽에 닫히므로, 같은 거래일이라도 "
+        f"국내·코인보다 날짜가 하루 뒤로 보입니다.</p>"
+    )
     return f"""<div class="scroll"><table>
 <thead><tr>
-<th>종목</th><th>이름</th><th>종가 (등락)</th><th>시장</th><th>봉</th><th>as_of</th>
+<th>종목</th><th>이름</th><th>종가 (등락)</th><th>시장</th><th>봉</th>
+<th>봉 마감 ({label})</th>
 <th>순위</th><th>유니버스</th><th>백분위</th><th>점수</th><th>전략</th><th>소스 해시</th>
 </tr></thead>
 <tbody>
@@ -267,7 +286,7 @@ _DOCUMENT = """<!doctype html>
 <h1>{heading}</h1>
 <p class="meta">
   <code>{run_id}</code> · mode <code>{mode}</code> · 상태 <code>{status}</code><br>
-  기준 시각 <code>{as_of}</code> · 기록됨 {committed}
+  기준 시각 <code>{as_of}</code> ({tz}) · 기록됨 {committed}
 </p>
 {banner}
 <h2>신호 {signal_count}건</h2>
