@@ -18,8 +18,8 @@
 
 **이 경로는 `strategy check`가 잡지 못한다.** 전략 코드는 완전히 인과적이고
 미래 참조는 유니버스 쪽에 있기 때문이다. AST 검사에 걸리지 않는 look-ahead라
-차단을 여기에 명시적으로 둔다. Phase 3에서 point-in-time 스냅샷이 생기면
-그때 backtest 경로가 열린다.
+차단을 여기에 명시적으로 둔다. Phase 3.5(백테스트)에서 point-in-time 스냅샷이
+생기면 그때 backtest 경로가 열린다.
 """
 
 from __future__ import annotations

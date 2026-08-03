@@ -541,6 +541,8 @@ def describe(as_json: JsonOpt = False) -> None:
         "nodes": [{"type": n["type"], "category": n["category"]} for n in catalog()],
         "timeframes": sorted(JUDGEMENT),
         "database": settings.database_url,
+        # 커버리지는 `ingest`가 대상별로 낸다 (3.9). 여기서 다시 집계하면 읽기 전용
+        # 명령이 캐시 테이블을 훑게 되고, DB가 없을 때의 분기가 하나 더 생긴다.
         "cache_coverage": None,
         "last_run": last,
     }
@@ -563,7 +565,7 @@ def describe(as_json: JsonOpt = False) -> None:
                      if pipeline_info.get('loaded') else '-'} "
         f"· 검증 {'통과' if pipeline_info.get('valid') else '실패'}",
         f"마지막 실행 {last['run_id'] if last else '(없음)'}",
-        "캐시 커버리지 — 미구현 (Phase 2)",
+        "캐시 커버리지 — `marketscan ingest`가 대상별로 보여 줍니다",
     ]
     out.emit(payload, human)
 
