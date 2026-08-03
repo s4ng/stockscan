@@ -45,8 +45,11 @@
 > **시세 소스 4종(PyKRX · yfinance · FDR · CCXT)과 `ohlcv_cache` 수집 계층이 붙었습니다.**
 >
 > ⚠️ **`review`와 `serve`는 아직 없습니다** — Phase 3입니다. 지금 있는 것은 `run`뿐입니다.
-> **파이프라인도 아직 업비트만 스캔합니다.** `symbolUniverse`의 `venue`가 단수라 시장을
-> 늘리려면 노드를 늘려야 하는데, 그러면 조용히 깨집니다 — 아래 Phase 2 참조.
+>
+> **한국·미국 주식 소스는 실제로 동작합니다.** `marketData`의 `instruments`에 직접 적으면
+> 오늘 바로 됩니다. 다만 **거래소에 물어 유니버스를 자동으로 뽑는 것은 한 시장씩만** 됩니다 —
+> `symbolUniverse`의 `venue`가 단수라 시장을 늘리려면 노드를 늘려야 하는데, 그러면 조용히
+> 깨집니다(아래 Phase 2). 그래서 `pipelines/demo.yaml`은 아직 업비트만 스캔합니다.
 
 v0.5 전환이 끝났습니다. 아래가 v0.4에서 바뀐 것들입니다.
 
@@ -465,16 +468,34 @@ venue마다 `quote_currency`·`top_by_turnover`가 달라야 하므로(코인은
 `review`가 있어야 "그래서 어떻게 됐나"가 남고, 그게 있어야 스크리너가 자신감 기계가 되지
 않습니다(§1.1).
 
+**3a. 데이터 — 리뷰가 읽을 것을 먼저 채웁니다**
+
 - [ ] **신호별 사후 수익률** (`Forward Return Evaluator`) — `as_of`로부터 1·5·20봉 뒤 종가를
-      캐시에서 찾아 채웁니다. **캐시가 붙어서 외부 호출이 필요 없습니다** — 지금이 가장 쌉니다
-- [ ] ★ **`marketscan review`** — 기간·전략·시장으로 걸러 신호 이력 + 신호 이후 주가 경로를
-      **정적 HTML 차트**로. `lightweight-charts` vendoring, 신호 시점에 마커 (§12.7)
+      캐시에서 찾아 `signals`에 채웁니다. **캐시가 붙어서 외부 호출이 필요 없습니다**
 - [ ] **수집 대상에 "과거 신호 종목" 추가** (규칙 18) — 유니버스에서 밀린 종목의 봉이 끊기면
       리뷰 차트가 거기서 멈추고, **하필 밀린 종목이 대개 내린 종목이라** 화면이 낙관 편향됩니다
+- [ ] **벤치마크 지수 수집** — KOSPI · S&P500 · BTC. §4.8의 "벤치마크 대비 초과수익"에
+      필요한데 **지금은 하나도 안 모읍니다.** pykrx·FDR이 지수를 줍니다
+
+**3b. `review` — 정적 HTML + 차트**
+
+- [ ] ★ **`bar_time` → 세션 날짜 변환기** — `bar_time`은 세션 **마감** 시각이라 그대로 날짜로
+      자르면 **코인이 하루 어긋납니다**(업비트 8/2 봉이 8/3로 찍힘). 규칙은
+      `(bar_time − 1초)를 calendar.tz로 옮긴 날짜`. **봉과 마커가 같은 함수를 써야** 마커가
+      제 봉 위에 앉습니다
+- [ ] `lightweight-charts` vendoring (`app/report/vendor/` + LICENSE) — **CDN 금지** (§2.1)
+- [ ] **`marketscan review`** — 기간·전략·시장으로 걸러 신호 이력 + 이후 주가 경로를
+      정적 HTML로. 신호 시점에 마커 (§12.7)
+- [ ] 차트를 신호의 `meta["adjusted"]`와 **같은 키로** 조회 — 다르면 마커가 엉뚱한 가격에 뜹니다
+- [ ] 종목별 `priceFormat` — KRW 주식은 정수 원, 코인은 소수점 8자리. 기본값이면 코인이
+      전부 `0.00`으로 찌그러집니다
+- [ ] `stats`의 forward return · hit rate · IC (§4.8 신호 품질 지표)
+
+**3c. `serve` — 상주 실행**
+
 - [ ] **`marketscan serve`** — 스케줄 + 알림 + ⚠️ **하루 1회 하트비트**(신호 0건이어도).
       없으면 프로세스가 죽은 것과 신호가 없는 것이 구분되지 않습니다 (§8)
 - [ ] `Schedule Trigger` 노드 · `Telegram Alert` 노드 (`sends_external_messages = True`)
-- [ ] `stats`의 forward return · hit rate · IC (§4.8 신호 품질 지표)
 
 ### Phase 3.5 — 백테스트
 

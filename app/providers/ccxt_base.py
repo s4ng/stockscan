@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import ccxt.async_support as ccxt_async
 import pandas as pd
 
@@ -45,6 +46,13 @@ UTC = ZoneInfo("UTC")
 #: 12-1 모멘텀은 273봉이 필요하므로 **페이지네이션은 선택이 아니다.**
 DEFAULT_PAGE_SIZE = 200
 
+
+def _system_dns_session() -> aiohttp.ClientSession:
+    """OS 해석기로 DNS를 도는 aiohttp 세션. 이유는 `CcxtProvider._RESOLVER_NOTE`."""
+    return aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+    )
+
 #: 페이지네이션 최대 왕복. 거래소가 진전 없는 응답을 계속 주는 경우의 안전판이다.
 MAX_PAGES = 40
 
@@ -53,6 +61,19 @@ class CcxtProvider(MarketDataProvider):
     """CCXT가 지원하는 거래소 하나. `CcxtProvider("upbit")`처럼 쓴다."""
 
     credential_schema = None  # 공개 OHLCV는 무인증 (3.3)
+
+    #: ★ **DNS는 OS 해석기를 쓴다.**
+    #:
+    #: aiohttp는 `aiodns`(c-ares)가 설치돼 있으면 그것을 기본 해석기로 쓰는데,
+    #: c-ares는 `/etc/resolv.conf`나 윈도우 레지스트리에서 **DNS 서버 목록을 스스로
+    #: 읽는다.** VPN·회사 네트워크·일부 어댑터 구성에서 이 목록이 비어 나오면
+    #: `Could not contact DNS servers`로 실패하고, CCXT가 그것을
+    #: `ExchangeNotAvailable`로 감싸 **"거래소가 죽었다"처럼 보인다.**
+    #: 같은 순간 curl·requests는 멀쩡히 붙는다 — 그쪽은 OS 해석기를 쓰기 때문이다.
+    #:
+    #: 진단이 매우 어려운 종류라(네트워크는 되는데 이 프로그램만 안 된다) 환경에
+    #: 기대지 않고 여기서 못박는다. 하루 몇 번 도는 배치라 비동기 DNS로 얻을 것도 없다.
+    _RESOLVER_NOTE = "ThreadedResolver — OS 해석기 사용 (aiodns 우회)"
 
     def __init__(self, exchange_id: str, page_size: int = DEFAULT_PAGE_SIZE) -> None:
         factory = getattr(ccxt_async, exchange_id, None)
@@ -69,6 +90,7 @@ class CcxtProvider(MarketDataProvider):
         self._quirk = quirk_for(exchange_id)
         self._factory = factory
         self._exchange: Any | None = None
+        self._session: aiohttp.ClientSession | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # capabilities는 손으로 선언하지 않고 ex.has / ex.timeframes에서 유도한다 (3.3).
@@ -99,7 +121,10 @@ class CcxtProvider(MarketDataProvider):
         """
         loop = asyncio.get_running_loop()
         if self._exchange is None or self._loop is not loop:
-            self._exchange = self._factory({"enableRateLimit": True})
+            self._session = _system_dns_session()
+            self._exchange = self._factory(
+                {"enableRateLimit": True, "session": self._session}
+            )
             self._loop = loop
         return self._exchange
 
@@ -109,6 +134,9 @@ class CcxtProvider(MarketDataProvider):
             await self._exchange.close()
             self._exchange = None
             self._loop = None
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
     # --------------------------------------------------------------------- 시세
     async def fetch_ohlcv(

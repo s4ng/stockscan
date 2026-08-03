@@ -219,5 +219,6 @@ uv run marketscan review --since 2026-01-01   # 신호 이력 + 차트 (Phase 3)
 | `explain`의 데이터 출처가 `cache` | 정상이다. 괄호 안이 그 구간을 실제로 채운 소스다 |
 | 폐지 종목 수집이 봉을 하나도 못 받음 | `end`가 오늘로 잡혔다. 폐지 종목은 **폐지 시점**을 end로 써야 한다 |
 | 혼합 유니버스인데 상위가 전부 코인 | 규칙 17을 어겼다. 시장을 섞어 한 풀에 정렬한 것 |
+| `ExchangeNotAvailable`인데 curl은 붙음 | DNS다. aiodns(c-ares)가 서버 목록을 못 읽은 것 — `ccxt_base._system_dns_session()` 참조 |
 | `review` 차트가 특정 시점에 멈춤 | 규칙 18을 어겼다. 그 종목이 유니버스에서 빠지며 수집이 끊겼다 |
 | `review`가 열리는데 차트만 안 보임 | 차트 라이브러리를 CDN으로 걸었다. vendoring해서 인라인한다 |
