@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import warnings
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -37,6 +38,21 @@ from app.providers.base import (
 from app.providers.daily_frame import daily_frame
 
 UTC = ZoneInfo("UTC")
+
+# pykrx 1.0.x가 임포트되며 `pkg_resources`를 부르고 setuptools가 거기에 UserWarning을
+# 건다. 우리 코드도 아니고 사용자가 할 수 있는 것도 없는데, **실제 수집이 일어나는
+# 실행마다** stderr 맨 앞에 찍혀서 성공한 실행이 실패처럼 읽힌다 — 12.3이 "신호 0건과
+# 실패를 구분한다"고 정한 것을 서드파티 경고가 도로 흐리는 셈이다.
+#
+# ⚠️ **이건 임시 조치다.** 진짜 해결은 pykrx 1.2.x인데(1.2.3부터 pkg_resources 없음),
+# 같은 릴리스가 `pandas<3.0`을 요구해서 올리면 pandas가 메이저로 내려간다.
+# 재검토 조건과 함께 지울 것들은 pyproject.toml의 pykrx 주석에 적어 두었다.
+#
+# 막는 것은 **이 경고 문구 하나**다. pkg_resources가 실제로 사라지면 ImportError로
+# 그대로 터지고, 라우팅이 fdr로 폴백하며 `failed_sources`에 드러난다 (3.4).
+warnings.filterwarnings(
+    "ignore", message=r".*pkg_resources is deprecated.*", category=UserWarning
+)
 
 #: pykrx 컬럼 → 내부 표기.
 _COLUMNS = {

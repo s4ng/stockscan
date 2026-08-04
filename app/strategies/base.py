@@ -48,7 +48,7 @@ class EmptyParams(BaseModel):
 
 
 class Strategy(ABC):
-    """전략 1개. 최상위 `strategies/<id>.py`에 이 클래스의 구현체를 하나만 둔다."""
+    """전략 1개. 설정 파일 옆(`~/.marketscan/<id>.py`)에 이 클래스의 구현체를 하나만 둔다."""
 
     #: 파일 이름(확장자 제외)과 반드시 같아야 한다. 로더가 강제한다.
     id: ClassVar[str]

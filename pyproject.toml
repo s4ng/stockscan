@@ -16,11 +16,23 @@ dependencies = [
     "pyyaml>=6.0",
     # 코인 일봉. 거래소당 어댑터를 만들지 않기 위한 유일한 이유다 (3.3).
     "ccxt>=4.4",
-    "pykrx>=1.0.51",
+    # ⚠️ 1.2.x로 올리지 못하고 있다. 1.2.3부터 pkg_resources를 버려(좋다) 아래 setuptools
+    #    핀이 필요 없어지지만, 같은 릴리스부터 `pandas<3.0` 상한이 붙는다. 우리는 3.0.5를
+    #    쓰므로 올리는 순간 **pandas가 메이저로 내려간다** — 소스 하나 때문에 코어 라이브러리를
+    #    되돌릴 일은 아니다. 재검토 조건: pykrx가 pandas 3을 허용하면 그때 올리고,
+    #    아래 setuptools 핀과 pykrx_source.py의 경고 필터를 **함께** 지운다.
+    "pykrx>=1.0.51,<1.2",
     "finance-datareader>=0.9.202",
     "yfinance>=1.5.2",
     "exchange-calendars>=4.13.2",
+    # pykrx 1.0.x가 임포트 시점에 pkg_resources를 부른다. 81+에서 사라질 예정이라
+    # 핀으로 붙잡아 둔 것이고, **우리가 쓰는 곳은 없다.** 위 pykrx 주석의 재검토
+    # 조건이 충족되면 이 줄부터 지운다.
     "setuptools<81",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.30",
+    "jinja2>=3.1.6",
+    "python-multipart>=0.0.32",
 ]
 
 [project.scripts]
@@ -28,6 +40,7 @@ marketscan = "app.cli.main:main"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.7",

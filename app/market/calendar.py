@@ -306,6 +306,20 @@ def build_offline_calendars(daily_boundary: str = "UTC00") -> dict[str, MarketCa
     }
 
 
+def session_date(bar_time: datetime, calendar: MarketCalendar) -> date:
+    """봉의 **세션 날짜**. 차트의 x축과 마커가 함께 쓰는 단일 출처다.
+
+    ★ `bar_time`은 세션의 **마감** 시각이라(규칙 15) 그대로 날짜를 떼면 하루
+    어긋난다 — 업비트 8/2 일봉의 마감은 UTC 8/3 00:00이라 8/3으로 찍히고,
+    그러면 차트의 봉과 마커가 서로 다른 날에 앉는다. 1초를 빼서 세션 **안쪽**으로
+    들어간 뒤 그 시장의 시간대로 옮긴다.
+
+    미국장도 같은 이유로 필요하다: 8/3 세션의 마감은 UTC 8/3 20:00이지만
+    KST로 옮기면 8/4 새벽이라, 한국 시간대로 날짜를 떼면 역시 하루 밀린다.
+    """
+    return (_as_utc(bar_time) - timedelta(seconds=1)).astimezone(calendar.tz).date()
+
+
 def _as_utc(t: datetime) -> datetime:
     if t.tzinfo is None:
         raise ValueError("naive datetime은 허용하지 않습니다. 모든 시각은 tz-aware UTC여야 합니다.")

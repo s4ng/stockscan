@@ -12,6 +12,6 @@ from app.nodes.inputs import market_data, symbol_universe  # noqa: F401
 from app.nodes.logic import condition_splitter  # noqa: F401
 from app.nodes.registry import catalog, get_node_class, register
 from app.nodes.strategy import runner as strategy_runner  # noqa: F401
-from app.nodes.triggers import manual  # noqa: F401
+from app.nodes.triggers import manual, schedule  # noqa: F401
 
 __all__ = ["catalog", "get_node_class", "register"]

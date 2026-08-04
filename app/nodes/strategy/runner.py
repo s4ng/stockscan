@@ -17,12 +17,13 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from app.engine.context import RunContext
-from app.engine.types import Bundle, Item
+from app.engine.types import Bundle
 from app.nodes.base import BaseNode, NodeError
 from app.nodes.registry import register
 from app.schemas.pipeline import MAIN
 from app.strategies.base import RANK_FEATURE, Strategy, StrategyError
 from app.strategies.registry import LoadedStrategy, load_strategy
+from app.strategies.stages import eligible_items, run_stages
 
 #: node_runs에 남길 랭킹 스냅샷의 크기. 전부 남기면 유니버스 500종목에서 로그가 터진다.
 RANK_SNAPSHOT_SIZE = 20
@@ -30,7 +31,7 @@ RANK_SNAPSHOT_SIZE = 20
 
 class StrategyRunnerParams(BaseModel):
     strategy_id: str = Field(
-        description="strategies/<id>.py 의 파일 이름. 예: cross_momentum_12_1",
+        description="설정 파일과 같은 디렉터리의 <id>.py. 예: cross_momentum_12_1",
         min_length=1,
     )
     strategy_sha256: str = Field(
@@ -68,15 +69,17 @@ class StrategyRunnerNode(BaseNode):
         _warn_on_hash_drift(loaded, params.strategy_sha256, ctx)
         strategy_params = _parse_params(strategy, params.params)
 
-        eligible = _eligible_items(bundle, strategy, params.require_startup_candles, ctx)
+        eligible = eligible_items(bundle, strategy, params.require_startup_candles, ctx)
         if not eligible:
             # 빈 Bundle도 정상 출력이다 (4.1). 실패로 만들지 않는다.
             ctx.log.info("판정할 종목이 없습니다")
             return {MAIN: bundle.replace_items([])}
 
-        computed = [_compute_one(strategy, item, strategy_params, ctx) for item in eligible]
-        ranked = strategy.rank(Bundle(computed, dict(bundle.context)), strategy_params, ctx)
-        selected = strategy.select(ranked, strategy_params, ctx)
+        # ★ 단계 순서는 `stages.run_stages`가 단일 출처다 — `backtest`의 리플레이가
+        #   같은 함수를 부른다. 여기에 순서를 다시 적으면 언젠가 한쪽만 바뀌고,
+        #   그날부터 백테스트가 실거래와 다른 코드를 돌게 된다.
+        stages = run_stages(strategy, Bundle(eligible, dict(bundle.context)), strategy_params, ctx)
+        ranked, selected = stages.ranked, stages.selected
 
         # `universe_size`는 **점수가 나온** 종목 수다(rank가 세운다). 훑은 종목 수와
         # 다르고, 둘을 같은 말로 읽으면 "30개 중 2등"으로 오해한다 — 실제로는 봉이
@@ -135,49 +138,6 @@ def _parse_params(strategy: Strategy, raw: dict[str, Any]) -> BaseModel:
             f"[{strategy.id}] 전략 파라미터 오류 — {details}. "
             f"사용 가능한 파라미터는 `marketscan describe --strategy {strategy.id}`로 확인하세요."
         ) from exc
-
-
-def _eligible_items(
-    bundle: Bundle, strategy: Strategy, require_warmup: bool, ctx: RunContext
-) -> list[Item]:
-    """타임프레임과 워밍업 조건을 만족하는 item만 남긴다. 제외는 전부 로그로 남는다."""
-    wrong_tf: list[str] = []
-    short: list[str] = []
-    kept: list[Item] = []
-
-    for item in bundle:
-        if item.timeframe != strategy.timeframe:
-            wrong_tf.append(f"{item.instrument.key}({item.timeframe})")
-            continue
-        if require_warmup and len(item.ohlcv) < strategy.startup_candles:
-            short.append(f"{item.instrument.key}({len(item.ohlcv)}봉)")
-            continue
-        kept.append(item)
-
-    if wrong_tf:
-        ctx.log.warning(
-            f"{strategy.id}의 타임프레임은 {strategy.timeframe}입니다. "
-            f"다른 봉이라 제외: {', '.join(wrong_tf[:20])}. "
-            f"Market Data 노드의 timeframe을 맞추세요."
-        )
-    if short:
-        ctx.log.warning(
-            f"워밍업 봉이 부족해 제외 (필요 {strategy.startup_candles}봉): "
-            f"{', '.join(short[:20])}"
-            f"{f' 외 {len(short) - 20}건' if len(short) > 20 else ''}. "
-            f"Market Data의 lookback을 늘리세요."
-        )
-    return kept
-
-
-def _compute_one(strategy: Strategy, item: Item, params: BaseModel, ctx: RunContext) -> Item:
-    result = strategy.compute(item, params, ctx)
-    if not isinstance(result, Item):
-        raise NodeError(
-            f"[{strategy.id}] compute가 Item을 돌려주지 않았습니다 ({type(result).__name__}). "
-            f"`return item.with_features(...)` 형태여야 합니다."
-        )
-    return result
 
 
 def _rank_snapshot(ranked: Bundle) -> list[dict[str, Any]]:

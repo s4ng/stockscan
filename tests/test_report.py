@@ -15,7 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from app.cli import main as cli_main
-from app.core.config import get_settings
+from app.core.config import SAMPLE_DIR, get_settings
 from app.engine.runner import NodeRunRecord, NodeStatus, RunResult, RunStatus
 from app.report.run_report import ReportInput, report_path, write_run_report
 from app.storage import db
@@ -136,6 +136,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     settings = get_settings()
     monkeypatch.setattr(settings, "pipeline_path", pipeline_path)
+    monkeypatch.setattr(settings, "strategies_dir", SAMPLE_DIR)
     monkeypatch.setattr(settings, "reports_dir", tmp_path / "reports")
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}")
     yield tmp_path

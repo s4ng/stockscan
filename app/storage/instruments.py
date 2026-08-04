@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.market.instrument import InstrumentRef
@@ -115,3 +115,47 @@ async def save(
             )
         )
     return rank
+
+
+async def find(session: AsyncSession, query: str, *, limit: int = 12) -> list[InstrumentRef]:
+    """심볼이나 이름으로 종목을 찾는다. `backtest 삼성전자`가 쓰는 창구다.
+
+    ⚠️ **여기서 찾지 못한다고 없는 종목은 아니다.** 이 표는 `run`·`ingest`가 훑은
+    venue만 채운다. 그래서 못 찾았을 때의 안내는 "그런 종목이 없다"가 아니라
+    **"`venue:symbol`로 직접 적어라"**여야 한다 — 전자는 사용자를 엉뚱한 곳으로 보낸다.
+
+    정확히 일치한 것을 먼저 돌려준다. 부분 일치는 뒤에 붙여 후보로 보여 준다.
+    """
+    text = query.strip()
+    if not text:
+        return []
+
+    like = f"%{text}%"
+    stmt = (
+        select(InstrumentRow)
+        .where(
+            (func.lower(InstrumentRow.symbol) == text.lower())
+            | (InstrumentRow.display_name == text)
+            | InstrumentRow.display_name.like(like)
+            | InstrumentRow.symbol.like(like)
+        )
+        .order_by(InstrumentRow.venue, InstrumentRow.rank)
+        .limit(limit * 4)
+    )
+    rows = list((await session.execute(stmt)).scalars())
+
+    def priority(row: InstrumentRow) -> tuple[int, int]:
+        if row.symbol.lower() == text.lower():
+            return (0, row.rank)
+        if row.display_name == text:
+            return (1, row.rank)
+        return (2, row.rank)
+
+    rows.sort(key=priority)
+    return [
+        replace(
+            InstrumentRef.parse(f"{row.venue}:{row.symbol}"),
+            display_name=row.display_name or row.symbol,
+        )
+        for row in rows[:limit]
+    ]
