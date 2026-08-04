@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="grid">
+
+  <div class="card">
+    <h3>실행</h3>
+    <form method="post" action="/actions/run">
+      <select name="market">
+        <option value="">전체 시장</option>
+        {% for m in markets %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select>
+      {# 토글이 켜져 있으면 base.html의 submit 핸들러가 확인창을 띄운다.
+         켜 둔 채 잊고 누르는 것이 이 화면에서 가장 비싼 실수다 — 봉 소비는
+         되돌릴 수 없다 (규칙 11). #}
+      <label class="toggle">
+        <input type="checkbox" name="commit" value="on">
+        <span class="track"></span>
+        <span class="label">기록</span>
+      </label>
+      <button type="submit">실행</button>
+    </form>
+    <p class="note">
+      기록을 끄면 <strong>dry-run</strong>입니다 — 몇 번을 돌려도 안전합니다.
+      켜면 <code>signals</code>에 남고 봉을 소비합니다(같은 봉으로 다시 돌리면 0건이
+      나오는 것이 정상입니다). <strong>화면에서 누른 실행은 알림을 보내지 않습니다.</strong>
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>백테스트</h3>
+    <form method="post" action="/actions/backtest">
+      <input name="instrument" placeholder="krx:005930 · 삼성전자" size="18" required>
+      <input name="start" placeholder="시작일 20251201" size="12" required>
+      <input name="end" placeholder="종료일(선택)" size="11">
+      <select name="strategy">
+        <option value="">설정의 전략</option>
+        {% for s in strategies %}<option value="{{ s.id }}">{{ s.id }}</option>{% endfor %}
+      </select>
+      <button type="submit">리플레이</button>
+    </form>
+    <p class="note">
+      한 종목을 하루씩 되감습니다. 부작용 없음.
+      <strong>마커는 “조건 충족일”이지 “실제 신호일”이 아닙니다</strong> — 종목 하나만 보면
+      횡단면 컷(상위 N개)의 후보가 1개라 항상 통과합니다.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>차트 데이터 동기화</h3>
+    <form method="post" action="/actions/ingest">
+      <input name="venue" placeholder="시장(선택): krx" size="12">
+      <button type="submit">무엇이 필요한지 보기</button>
+      <button type="submit" name="commit" value="on">지금 받아서 저장</button>
+    </form>
+    <p class="note">
+      전략은 지표 계산에 과거 봉이 필요합니다(추세추종은 253봉). 한 번 받은 봉은 DB에
+      쌓아 두고 다시 씁니다.<br>
+      <strong>무엇이 필요한지 보기</strong> — 어떤 종목의 봉이 얼마나 필요한지, 지금 얼마나
+      있는지만 확인합니다. <em>거래소를 부르지 않습니다.</em><br>
+      <strong>지금 받아서 저장</strong> — 실제로 받아 저장합니다. 이미 최신인 종목은
+      건너뜁니다. 쌓인 봉은 <strong>무료 소스가 막혀도 남는 자산</strong>이라 지우는 기능은
+      없습니다.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>스케줄</h3>
+    {% if scheduler.error %}
+      <p class="muted">⚠️ {{ scheduler.error }}</p>
+      <p class="note">설정 파일에 <code>scheduleTrigger</code> 노드를 넣으면 이 화면이 채워집니다.</p>
+    {% else %}
+      <table class="kv">
+        <tr><th>다음 실행</th><td>{{ scheduler.next_fire or '-' }}</td></tr>
+        <tr><th>다음 하트비트</th><td>{{ scheduler.next_heartbeat or '(없음)' }}</td></tr>
+        <tr><th>슬롯</th><td>{% for line in scheduler.lines %}{{ line }}<br>{% endfor %}</td></tr>
+      </table>
+      {% if scheduler.skipped %}
+      <p class="note">
+        시작 시각보다 앞서 있던 오늘 슬롯 {{ scheduler.skipped|join(', ') }}은
+        <strong>건너뛰었습니다</strong> — 켜자마자 몰아서 돌리면 봉을 한꺼번에 소비합니다.
+      </p>
+      {% endif %}
+      {% if scheduler.history %}
+      <table class="kv" style="margin-top:.6rem">
+        {% for f in scheduler.history %}
+        <tr><th>{{ f.at }}</th><td>{{ '✅' if f.ok else '⚠️' }} {{ f.label }} · {{ f.detail }}</td></tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+      <form method="post" action="/actions/alert-test">
+        <button type="submit">테스트 알림 보내기</button>
+      </form>
+      {% if scheduler.deliveries %}
+      <p class="note">
+        최근 알림 —
+        {% for d in scheduler.deliveries %}
+          {{ d.at }} [{{ d.channel }}] {{ '보냄' if d.ok else '실패: ' + d.error }}<br>
+        {% endfor %}
+        <strong>채널이 <code>log</code>면 아무 데도 보내지 않고 기록만 한 것입니다</strong>
+        (텔레그램 토큰 미설정).
+      </p>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>현재 상태</h3>
+    <table class="kv">
+      <tr><th>설정 위치</th><td>{{ config_dir }}</td></tr>
+      <tr><th>설정 파일</th><td>{{ pipeline_path or '-' }}</td></tr>
+      {% if pipeline %}
+      <tr><th>파이프라인</th><td>{{ pipeline.pipeline_id }} · 노드 {{ pipeline.nodes|length }}개</td></tr>
+      <tr><th>훑는 범위</th><td>{{ universe }}</td></tr>
+      <tr><th>전략</th><td>{{ strategy_ids|join(', ') or '-' }}</td></tr>
+      {% else %}
+      <tr><th>파이프라인</th><td class="muted">{{ pipeline_error }}</td></tr>
+      {% endif %}
+      <tr><th>마지막 실행</th>
+          <td>{% if last_run %}{{ last_run.run_id }} · {{ last_run.status }}{% else %}(없음){% endif %}</td></tr>
+    </table>
+  </div>
+
+</div>
+
+{% if signals %}
+<h2>방금 실행한 신호 {{ signals|length }}건</h2>
+<div class="scroll"><table>
+<thead><tr><th>종목</th><th>이름</th><th>종가</th><th>봉 마감</th><th>시장</th><th>순위</th><th>전략</th></tr></thead>
+<tbody>
+{% for s in signals %}
+<tr><td>{{ s.instrument }}</td><td>{{ s.display_name }}</td><td>{{ s.close }}</td>
+    <td>{{ s.as_of }}</td><td>{{ s.market }}</td><td>{{ s.rank }}</td><td>{{ s.strategy_id }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+{% endif %}
+
+<h2>전략 {{ strategies|length }}개 <span class="muted">— {{ strategies_dir }}</span></h2>
+<div class="scroll"><table>
+<thead><tr><th>전략</th><th>봉</th><th>워밍업</th><th>소스 해시</th><th>로드</th></tr></thead>
+<tbody>
+{% for s in strategies %}
+<tr><td>{{ s.id }}</td><td>{{ s.timeframe }}</td><td>{{ s.startup_candles or '-' }}</td>
+    <td><code>{{ s.sha256[:12] }}</code></td>
+    <td>{% if s.loadable %}✅{% else %}<span class="muted">{{ s.error }}</span>{% endif %}</td></tr>
+{% endfor %}
+</tbody></table></div>
+
+<h2>최근 리포트</h2>
+{% include "_reports_table.html" %}
+<p class="note"><a href="/reports">전체 보기</a></p>
+
+{% endblock %}

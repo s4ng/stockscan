@@ -70,7 +70,7 @@ nodes:
       strategy_id: cross_momentum_12_1
       params:
         # 표준값입니다. 백테스트로 고른 값이 아닙니다 (4.8) — 고치기 전에
-        # strategies/cross_momentum_12_1.py의 docstring을 읽으세요.
+        # 옆의 cross_momentum_12_1.py의 docstring을 읽으세요.
         lookback: 252
         skip: 21
         top_pct: 0.2

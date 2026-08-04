@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>리포트 {{ reports|length }}개</h2>
+{% include "_reports_table.html" %}
+<p class="note">
+  자기완결적인 HTML입니다 — CDN을 참조하지 않으므로 파일을 그대로 복사해 두어도
+  반년 뒤에 열립니다.
+</p>
+{% endblock %}

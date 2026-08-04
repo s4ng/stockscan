@@ -10,6 +10,9 @@ JSON에는 그걸 적을 자리가 없다.
 
 `pipeline_versions`에 남는 스냅샷은 **JSON 그대로 유지한다** — 그건 사람이 적는
 형식이 아니라 직렬화이고, 저장된 버전은 불변이어야 하므로 표현이 흔들리면 안 된다.
+
+기본 파일은 `~/.marketscan/config.yml`이고, **그 파일이 부르는 전략은 같은
+디렉터리에서 찾는다** (`load()`가 `bind_pipeline_dir`로 못 박는다).
 """
 
 from __future__ import annotations
@@ -20,9 +23,10 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from app.core.config import get_settings
+from app.core.config import SAMPLE_DIR, get_settings
 from app.market.instrument import markets, venues_of
 from app.schemas.pipeline import PipelineSpec
+from app.strategies.registry import bind_pipeline_dir
 
 #: 확장자 → 파서. YAML이 정본이고 JSON은 계속 읽는다 (스냅샷·기존 파일 호환).
 _PARSERS = {
@@ -45,17 +49,25 @@ class PipelineFileError(ValueError):
 
 
 def default_path() -> Path:
+    """기본 설정 파일. `~/.marketscan/config.yml`."""
     settings = get_settings()
     return settings.resolve(settings.pipeline_path)
 
 
 def load(path: Path | None = None) -> PipelineSpec:
-    target = path or default_path()
+    target = (path.expanduser() if path else default_path())
     if not target.is_file():
         raise PipelineFileError(
             f"파이프라인 정의를 찾을 수 없습니다: {target}. "
-            f"--pipeline으로 경로를 지정하거나 MARKETSCAN_PIPELINE_PATH를 설정하세요."
+            f"예제를 그대로 쓰려면 저장소의 {SAMPLE_DIR} 안의 파일을 "
+            f"{get_settings().config_dir}로 복사하세요 "
+            f"(설정과 전략이 같은 디렉터리에 있어야 합니다). "
+            f"--pipeline으로 경로를 지정하거나 MARKETSCAN_PIPELINE_PATH를 설정해도 됩니다."
         )
+
+    # 전략은 **이 파일 옆**에서 찾는다. 설정을 옮기면 전략도 함께 따라와야
+    # `-p sample/demo.yaml`이 예제 전략을 집는다.
+    bind_pipeline_dir(target)
 
     parser = _PARSERS.get(target.suffix.lower())
     if parser is None:

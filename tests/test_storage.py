@@ -154,25 +154,29 @@ async def test_delete_removes_versions_too(session):
     assert await repo.list_versions(session, pipeline_id) == []
 
 
-def test_sqlite_path_is_anchored_to_the_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path):
+def test_sqlite_path_is_anchored_to_the_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path):
     """★ 상대 경로를 그대로 두면 DB가 **현재 디렉터리**를 따라간다.
 
     `cd data && marketscan run`이 `data/data/marketscan.db`를 새로 만들고, 사용자는
     캐시와 신호가 통째로 비어 있는 것을 본다. 파일이 두 개 생겼다는 사실 자체가
     잘 안 보여서 진단이 어렵다.
+
+    기준점은 `config_dir`이다 — DB도 사용자 자산이라 저장소와 수명을 같이하면
+    안 된다 (`ohlcv_cache`는 무료 소스가 막혀도 남는 유일한 자산이다, §3.9).
     """
-    from app.core.config import PROJECT_ROOT
     from app.storage import db
 
+    settings = get_settings()
+    monkeypatch.setattr(settings, "config_dir", tmp_path / "home")
     db.configure("sqlite+aiosqlite:///./data/marketscan.db")
     try:
         monkeypatch.chdir(tmp_path)
         resolved = db.database_url()
     finally:
-        db.configure(get_settings().database_url)
+        db.configure(settings.database_url)
 
-    assert resolved.endswith((PROJECT_ROOT / "data/marketscan.db").as_posix())
-    assert str(tmp_path.as_posix()) not in resolved
+    assert resolved.endswith((tmp_path / "home/data/marketscan.db").as_posix())
+    assert not resolved.endswith("./data/marketscan.db")  # cwd를 따라가지 않는다
 
 
 def test_memory_and_absolute_urls_are_left_alone():

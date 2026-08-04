@@ -5,15 +5,15 @@
 | 명령 | 하는 일 |
 | :--- | :--- |
 | **`run`** | 오늘의 후보를 뽑습니다. `--commit`이면 기록에 남습니다 |
-| **`review`** | 남긴 신호를 모아 **"그래서 어떻게 됐나"를 차트로** 봅니다 |
-| **`serve`** | 위를 스케줄로 돌리고 알림을 보냅니다 |
+| **`backtest`** | 한 종목을 하루씩 되감아 **조건을 만족한 날을 차트에** 찍습니다 |
+| **`serve`** | 웹 UI로 위를 다 쓰고, 스케줄로 돌리고 알림을 보냅니다 |
 
 **예측 기계가 아니라 주의력 기계입니다.** 시장을 맞히는 것이 아니라, 혼자서는 볼 수 없는 범위를
 대신 보고 정해둔 규칙을 대신 지키는 것이 목적입니다. 최종 판단은 사람이 합니다.
 
-★ **`review`가 이 도구를 정직하게 유지합니다.** 리뷰 없는 스크리너는 자신감 기계가 됩니다 —
-사람은 맞은 종목만 기억하니까요. 오른 것과 내린 것을 **같이 보게 강제하는 화면**이 "후보"라는
-말의 무게를 지킵니다.
+★ **스크리너는 내버려 두면 자신감 기계가 됩니다** — 사람은 맞은 종목만 기억하니까요.
+그래서 `signals`에 내보낸 신호가 **전부** 남고, `backtest` 리포트는 그 마커가 실제 신호가
+아니라는 사실을 화면에 붙박이로 적습니다. 보기 싫은 것을 같이 보여 주는 쪽이 기본값입니다.
 
 - 설계 문서: **[ARCHITECTURE.md](./ARCHITECTURE.md)** — 모든 설계 결정의 근거
 - 작업 규칙: **[CLAUDE.md](./CLAUDE.md)**
@@ -45,7 +45,7 @@
 > **시세 소스 4종(PyKRX · yfinance · FDR · CCXT)과 `ohlcv_cache` 수집 계층이 붙었습니다.**
 >
 > **★ 세 시장을 한 번에 훑습니다.** 파이프라인 하나로 코인·한국·미국이 동시에 돕니다.
-> 실측(2026-08-03 기준, `-p pipelines/demo.yaml` 12-1 모멘텀):
+> 실측(2026-08-03 기준, `-p sample/demo.yaml` 12-1 모멘텀):
 >
 > ```
 > market     pool  signals   상위
@@ -61,20 +61,22 @@
 > **기본 전략은 추세추종(`trend_breakout_55`)입니다.** 같은 날 신호는 2건이었습니다 —
 > 돌파는 상태가 아니라 **사건**이라 0건인 날이 대부분입니다. 그게 정상입니다.
 >
-> ⚠️ **`review`와 `serve`는 아직 없습니다** — Phase 3입니다.
+> **Phase 3이 닫혔습니다** — `backtest`(§10)와 `serve`(§11: 웹 UI + 스케줄 + 알림 +
+> 하루 1회 하트비트)가 모두 붙었습니다.
+> ⚠️ 남은 것은 **사후 검증**입니다 — 신호별 사후 수익률·hit rate·IC (Phase 3.5).
 
 v0.5 전환이 끝났습니다. 아래가 v0.4에서 바뀐 것들입니다.
 
 | | v0.4 | **v0.5 (현재)** |
 | :--- | :--- | :--- |
-| 인터페이스 | FastAPI + React 캔버스 | **CLI (Typer) + 정적 HTML** |
+| 인터페이스 | FastAPI + React 캔버스 | **CLI (Typer) + 서버 렌더 UI**(빌드 단계 없음) |
 | 전략 표현 | 지표 노드 조합 | **파이썬 클래스 1개** |
 | 판단 단위 | 백테스트 일봉 / 알림 분봉 | **일봉·주봉 전용** |
 | 전략의 축 | 시계열 필터 체인 | **횡단면 랭킹** |
 | 배포 | Docker Compose | **`uv` + `[project.scripts]`** |
 | 정의 형식 | DAG JSON | **YAML** (§11-4에서 확정 — 스키마는 그대로) |
 | 자동 실행 | APScheduler | **`serve`로 확정** (§11-4b) — 구현은 Phase 3 |
-| 결과 확인 | 실행 로그뿐 | **`review` — 신호 이력 + 차트** (§12.7) |
+| 결과 확인 | 실행 로그뿐 | **`backtest` — 날짜별 리플레이 + 차트** (§12.7) |
 
 변경의 전체 목록과 근거는 [ARCHITECTURE.md 부록 C](./ARCHITECTURE.md)에 있습니다.
 
@@ -87,8 +89,19 @@ v0.5 전환이 끝났습니다. 아래가 v0.4에서 바뀐 것들입니다.
 ```bash
 git clone <저장소> marketscan && cd marketscan
 uv sync                    # 의존성 설치 (uv.lock 고정 — Docker가 필요 없습니다)
+
+mkdir -p ~/.marketscan && cp sample/* ~/.marketscan/   # 설정과 전략을 한 벌로 복사
 uv run marketscan describe  # 설치 확인
 ```
+
+**설정·전략·DB·리포트가 전부 `~/.marketscan/`에 삽니다.** 저장소 바깥이라 코드를 지우고 다시
+받아도 내 전략과 캐시가 남습니다 — 특히 `ohlcv_cache`는 무료 소스가 막혀도 남는 유일한
+자산이라(§3.9) 저장소와 수명을 같이하면 안 됩니다.
+
+기본 설정은 `~/.marketscan/config.yml`이고, **거기서 부르는 전략 파일은 같은 디렉터리에서
+찾습니다.** 설정과 전략은 한 벌이라 통째로 복사·백업할 수 있어야 하기 때문입니다. 저장소의
+`sample/`은 그 한 벌의 예제일 뿐입니다 — `-p sample/demo.yaml`로 부르면 `sample/`의 전략을
+집습니다.
 
 매번 `uv run`을 붙이기 싫다면 PATH에 올립니다.
 
@@ -125,7 +138,7 @@ upbit:KRW-NEAR   니어프로토콜    2,455 (+1.66%)   1d  2026-08-03 09:00  cr
 krx:043260       성호전자        15,870 (+6.22%)  1d  2026-08-03 15:30  krx     1     cross_momentum_12_1
 nasdaq:SNDK      Sandisk Corp    1,249 (+2.78%)   1d  2026-08-04 05:00  us      1     cross_momentum_12_1
 
-리포트 /path/to/reports/latest.html
+리포트 ~/.marketscan/reports/latest.html
 ※ dry-run입니다. signals 미기록 · 봉 미소비 (--commit으로 실행).
 ```
 
@@ -134,7 +147,7 @@ nasdaq:SNDK      Sandisk Corp    1,249 (+2.78%)   1d  2026-08-04 05:00  us      
 **`--commit`이 없으면 판단이 남지 않습니다** — `signals` 미기록, 봉 미소비. 몇 번을 돌려도
 안전하므로 전략을 고치면서 마음껏 돌려 보세요.
 
-> **단, 받아 온 봉과 종목 목록은 `data/marketscan.db`에 쌓입니다.** 이건 판단이 아니라
+> **단, 받아 온 봉과 종목 목록은 `~/.marketscan/data/marketscan.db`에 쌓입니다.** 이건 판단이 아니라
 > 자료라서 dry-run에도 열려 있습니다 — 버리면 무료 API를 두 번 두드리게 됩니다(§3.9).
 >
 > **실측: 1회차 64초 → 2회차 7초.** 봉은 `ohlcv_cache`, 종목 목록은 `instruments`에서
@@ -151,11 +164,11 @@ nasdaq:SNDK      Sandisk Corp    1,249 (+2.78%)   1d  2026-08-04 05:00  us      
 | `--now 2026-08-01T06:30:00Z` | 기준 시각 고정 — **재현 실행의 핵심** |
 | `--json` · `--limit N` | 기계용 출력 · 출력 건수 제한 |
 | `--no-report` | HTML 리포트를 쓰지 않습니다 (기본은 씁니다) |
-| `-p pipelines/other.json` | 다른 파이프라인 정의 |
+| `-p sample/demo.yaml` | 다른 파이프라인 정의 |
 
 ### 4. 리포트를 본다
 
-`reports/`에 자기완결적인 HTML 한 장이 떨어집니다. CDN·폰트·스크립트를 참조하지 않으므로
+`~/.marketscan/reports/`에 자기완결적인 HTML 한 장이 떨어집니다. CDN·폰트·스크립트를 참조하지 않으므로
 **반년 뒤에 열어도 그대로 보입니다.** `--limit`과 무관하게 **전체 신호**가 실립니다.
 
 ```
@@ -217,11 +230,11 @@ upbit:KRW-USDT (테더) · 봉 마감 2026-08-03 09:00 (KST) · 1d
 
 ### 7. 전략을 쓴다
 
-전략은 `strategies/` 아래 **파일 하나 = 전략 하나**입니다. IDE와 git을 그대로 씁니다.
+전략은 `~/.marketscan/` 아래 **파일 하나 = 전략 하나**입니다. IDE와 git을 그대로 씁니다.
 
 ```bash
 marketscan strategy new my_factor      # Params가 포함된 템플릿 생성
-$EDITOR strategies/my_factor.py       # compute를 채운다
+$EDITOR ~/.marketscan/my_factor.py     # compute를 채운다
 marketscan strategy check my_factor    # 인과성 정적 검사
 ```
 
@@ -259,8 +272,8 @@ leaky — 위반 1건
 
 ### 8. 파이프라인을 고친다
 
-`pipelines/trend.yaml`(추세추종)이 기본값입니다. 12-1 횡단면 모멘텀은 `pipelines/demo.yaml`에
-그대로 있고 `-p pipelines/demo.yaml`로 부릅니다. `MARKETSCAN_PIPELINE_PATH`로도 바꿉니다.
+`~/.marketscan/config.yml`(추세추종)이 기본값입니다. 12-1 횡단면 모멘텀은 `demo.yaml`에
+그대로 있고 `-p ~/.marketscan/demo.yaml`로 부릅니다. `MARKETSCAN_PIPELINE_PATH`로도 바꿉니다.
 노드는 **배선**입니다 — 지표 조건은 노드가 아니라 전략 클래스 안에 넣습니다(§5).
 
 ```
@@ -332,42 +345,151 @@ upbit:KRW-ETH  1d  320   0     -
 > ★ **dry-run도 캐시에 씁니다.** `--commit`이 막는 것은 **되돌릴 수 없는 것** 셋입니다 —
 > 알림 발송 · `signals` 기록 · 봉 소비. 봉을 캐시에 넣는 건 판단이 아니라 자료 축적이고,
 > 받아 놓고 버리면 무료 API를 두 번 두드리게 됩니다. 그래서 `marketscan run` 한 번이면
-> **DB(`data/marketscan.db`)가 생기고 봉이 쌓입니다.** 대신 `signals`는 비어 있고
+> **DB(`~/.marketscan/data/marketscan.db`)가 생기고 봉이 쌓입니다.** 대신 `signals`는 비어 있고
 > `bar_state` 테이블은 생기지도 않습니다.
 
 같은 봉을 두 소스가 다르게 주면 수집이 **그 자리에서 경고**합니다(§3.8).
 덮어쓰되 조용히 덮지 않습니다 — 수정주가 정책 차이로 생긴 계열 불연속은
 사후에 찾을 방법이 이것뿐입니다.
 
-### 10. 그래서 어떻게 됐나 — `review` ★
-
-> ⚠️ **Phase 3입니다. 아직 없습니다.**
+### 10. 그날 이 종목은 어땠나 — `backtest` ★
 
 ```bash
-marketscan review --since 2026-01-01 --strategy cross_momentum_12_1
-# → reports/review_2026-01-01_2026-08-03.html
+marketscan backtest krx:005930     --start 20251201              # 한국주식 (삼성전자)
+marketscan backtest nasdaq:AAPL    --start 20251201              # 미국주식 (Apple)
+marketscan backtest upbit:KRW-BTC  --start 20251201              # 암호화폐 (비트코인)
+
+marketscan backtest 삼성전자 --start 2025-12-01 --end 2026-03-01  # 이름으로도 됩니다
+# → ~/.marketscan/reports/backtest_krx_005930_20251201_20260301.html
 ```
 
-쌓인 신호를 전부 늘어놓고, 각 종목이 **신호 이후 어떻게 움직였는지**를 차트로 보여 줍니다.
-`explain`이 신호 하나의 *근거*를 답한다면 `review`는 신호 전체의 *결과*를 답합니다.
+**종목은 `venue:symbol`로 적습니다.** 시장을 심볼 모양으로 추측하지 않습니다 — `BTC`는
+나스닥에도 있고, venue를 모르면 어느 캘린더로 봉을 자를지·어느 통화로 표시할지·누구와
+비교할지가 정해지지 않습니다(§3.1).
+
+| 넣고 싶은 것 | 이렇게 적습니다 | 시장 | 심볼 형식 |
+| :--- | :--- | :--- | :--- |
+| 한국주식 | `krx:005930` · `krx:000660` | `krx` | 6자리 종목코드 |
+| 미국주식 | `nasdaq:AAPL` · `nasdaq:NVDA` · `nyse:KO` | `us` | 티커. **거래소를 구분해 적습니다** |
+| 암호화폐 (업비트) | `upbit:KRW-BTC` · `upbit:KRW-ETH` | `crypto` | `결제통화-기초자산` |
+| 암호화폐 (바이낸스) | `binance:BTC/USDT` | `crypto` | `기초자산/결제통화` |
+
+- **시장(`krx`/`us`/`crypto`)은 venue에서 유도됩니다.** `nasdaq`과 `nyse`는 **같은 `us`**라
+  한 풀에서 순위를 매깁니다. 이 값이 `--market` 필터와 랭킹 풀이 함께 쓰는 어휘입니다(규칙 17).
+- **결제 통화도 venue가 정합니다.** 주식은 고정(KRW·USD)이고, 코인은 심볼에서 읽습니다 —
+  업비트에는 KRW 말고 `BTC-ETH` 같은 BTC 마켓도 있어서 상수로 박으면 조용히 틀립니다.
+- **이름·심볼만 적으면**(`삼성전자`, `005930`) 설정 파일이 훑는 시장의 목록에서 찾고,
+  여러 시장에 걸리면 후보를 보여 주고 멈춥니다. `venue:symbol`로 적으면 이 조회가 없습니다.
+
+같은 표기를 파이프라인의 `instruments`에도 그대로 씁니다.
+
+```yaml
+instruments: [krx:005930, nasdaq:AAPL, upbit:KRW-BTC]
+```
+
+`--start`부터 **하루씩 되감으며** 전략을 다시 돌립니다. 그날까지 마감된 봉만 잘라서 넣으므로
+전략은 미래를 볼 수 없고, 조건을 만족한 날이 캔들 차트에 마커로 찍힙니다.
+
+```
+백테스트 krx:005930 (삼성전자) · trend_breakout_55 @ 037774d6eb16
+기간 2025-12-01 ~ 2026-08-04 · 판정 167일 · 워밍업 부족 0일 (필요 253봉)
+
+세션        봉 마감 (KST)     종가     근거
+----------  ----------------  -------  ---------------------------------------------
+2025-12-26  2025-12-26 15:30  117,000  trend_strength=3.409 · tsmom_12m=1.167
+2026-01-02  2026-01-02 15:30  128,500  trend_strength=3.77 · tsmom_12m=1.311
+```
 
 | | |
 | :--- | :--- |
-| **왜 필요한가** | 리뷰가 없으면 맞은 종목만 기억하게 됩니다. 오른 것과 내린 것을 같이 봐야 "후보"라는 말이 정직해집니다 |
-| **왜 백테스트보다 나은가** | 그때 **실제로 내보낸** 신호를 나중에 보는 것이라 **진짜 out-of-sample**입니다. 백테스트는 아무리 잘 만들어도 과거를 되감는 일이라 의심할 것이 남습니다 |
-| **무엇이 실리나** | `--commit` 실행의 신호만. dry-run은 아무것도 남기지 않으므로 실험이 리뷰를 오염시키지 않습니다 |
+| **용도** | **"내 구현이 안 틀렸나"** 하나입니다. "이 전략이 돈이 되나"가 아닙니다(§4.8) |
+| **부작용** | 없습니다. `signals`를 남기지 않고 봉도 소비하지 않습니다 |
+| **종목 지정** | `krx:005930`이 정확하고 빠릅니다. 이름·심볼만 적으면 설정이 훑는 시장의 목록에서 찾습니다 |
+| **전략** | 기본은 설정 파일의 전략과 **그 파라미터**입니다. `--strategy`로 바꿉니다 |
 
-**정적 HTML 한 장입니다. 서버가 아닙니다.** 읽기 전용이고 필터는 CLI 인자로 받으므로 서버가
-낄 자리가 없습니다. 차트 라이브러리(`lightweight-charts`)는 **저장소에 vendoring해서 인라인**합니다 —
-CDN을 걸면 반년 뒤 그 화면이 깨지는데, 반년 전 신호를 보는 것이 이 화면의 목적입니다.
+> ⚠️ **마커는 "조건 충족일"이지 "실제 신호일"이 아닙니다.**
+> 전략은 `compute`(종목별) → `rank`(횡단면) → `select`(컷) 순서인데, **종목 하나만** 보면
+> "상위 N개" 컷의 후보가 1개라 항상 통과합니다. 실제 실행에서는 같은 날 조건을 통과한 다른
+> 종목에 밀렸을 수 있습니다 — 그날 그 시장의 통과 종목이 컷보다 적었다면 두 값은 같습니다.
+> 리포트 상단에도 같은 경고가 붙박이로 들어갑니다. 순위·백분위는 표에서 뺐습니다(유니버스가
+> 1이라 언제나 "1 / 1 · 상위 100%"가 되어 정보가 아니라 오해입니다).
 
-> ⚠️ **`review`는 수익률 보고서가 아닙니다.** 여기 나오는 것은 **신호별 사후 수익률**이고,
-> "이걸 따랐으면 내 계좌가 어땠나"는 청산 규칙이 있어야 답할 수 있습니다(§1.3). 섞어 읽으면
-> 없는 성과를 본 것이 됩니다.
+**정적 HTML 한 장입니다. 서버가 아닙니다.** 차트 라이브러리(`lightweight-charts`)는
+저장소에 **vendoring해서 인라인**합니다 — CDN을 걸면 반년 뒤 그 화면이 깨지는데,
+반년 전 판단을 되짚는 것이 이 화면의 목적입니다.
 
-### 11. 자동으로 돌린다 — `serve`
+> ⚠️ **`review`(신호 이력 + 이후 경로)는 없앴고, `backtest`가 그 자리를 대신하지 않습니다.**
+> 하나는 내가 고른 종목의 과거 재생이고, 다른 하나는 실제로 낸 신호의 사후 성적입니다.
+> 후자를 보는 창구는 `signals`·`stats`이고 **사후 수익률·hit rate·IC는 아직 비어 있습니다**(§4.8).
 
-> ⚠️ **Phase 3입니다. 방식은 정해졌고 구현이 남았습니다.**
+### 11. 브라우저에서 쓴다 — `serve` ★
+
+```bash
+marketscan serve                 # http://127.0.0.1:8765
+marketscan serve --port 9000
+```
+
+대시보드에서 **지금 지원하는 것을 그대로** 씁니다 — `run`(dry-run·기록) · `backtest` ·
+`ingest` 버튼과, 만들어진 **리포트 HTML을 바로 여는 목록**입니다. 전략 목록·소스 해시·
+유니버스·마지막 실행도 한 화면에 있습니다.
+
+| | |
+| :--- | :--- |
+| **왜 v0.4로 돌아간 게 아닌가** | 걷어낸 것은 *파이프라인을 캔버스로 편집하는 React 앱*이고, 이건 **있는 명령을 부르고 결과를 띄우는 서버 렌더 화면**입니다. Node·pnpm·빌드 단계가 없습니다 |
+| **버튼과 CLI가 같은가** | 같습니다. 둘 다 `app/service.py`를 지납니다 — 갈라지면 규칙 11·13이 화면 쪽으로 우회됩니다 |
+| **알림** | ⚠️ **화면에서 누른 실행은 알림을 보내지 않습니다.** 손으로 돌릴 때마다 채널로 나가면 알림을 믿지 않게 됩니다(§12.2). 알림은 스케줄 실행만 |
+| **동시 실행** | 한 번에 하나입니다. 겹친 `--commit` 둘은 같은 봉을 두 번 소비합니다 |
+
+> ⚠️ **기본 바인딩은 `127.0.0.1`입니다.** 이 화면은 인증이 없고 `--commit` 실행을 부를 수
+> 있으며, 프로세스는 `~/.marketscan` 전체(DB 포함)에 접근합니다. 외부에 열려면 그 사실을
+> 알고 여세요.
+
+### 11b. 자동으로 돌린다 — 스케줄·알림 ★
+
+설정 파일의 `scheduleTrigger`가 실행 시각을 갖습니다. **`serve`의 설정이 아니라
+파이프라인의 성질**이라, 설정 파일을 복사하면 스케줄도 함께 갑니다.
+
+```yaml
+- id: trigger
+  type: scheduleTrigger
+  params:
+    timezone: Asia/Seoul
+    at:
+      - { time: "09:10", market: crypto, note: "업비트 일봉 마감(09:00 KST) 뒤" }
+      - { time: "15:40", market: krx, note: "KRX 마감(15:30) 뒤" }
+      - { time: "06:10", market: us, note: "미국장 마감 뒤 — 서머타임에 움직입니다" }
+    heartbeat: "09:00"    # ★ 신호 0건이어도 하루 1회
+```
+
+**시각은 로컬 기준으로 적고 마감과의 관계를 함께 적습니다.** 마감에서 자동으로 유도하지
+않는 이유는 서머타임입니다 — 미국장 마감은 한국 시각으로 1년에 두 번 한 시간씩 움직이는데,
+유도한 값은 그 사실을 화면 어디에도 남기지 않습니다.
+
+| | |
+| :--- | :--- |
+| **알림** | 신호가 있을 때만 보냅니다. 0건마다 오면 알림을 보지 않게 되고, 그 자리는 하트비트가 맡습니다 |
+| **하트비트** | ★ 신호 0건이어도 하루 1회. 없으면 **"신호가 없는 것"과 "프로세스가 죽은 것"이 구분되지 않습니다** |
+| **켤 때** | 시작 시각보다 앞서 지난 오늘 슬롯은 **건너뜁니다**(화면에 표시). 몰아서 돌리면 봉을 한꺼번에 소비합니다 |
+| **채널** | `MARKETSCAN_TELEGRAM_TOKEN`·`..._CHAT_ID`가 있으면 텔레그램, 없으면 **기록만** 합니다(화면에서 볼 수 있습니다) |
+
+**알림 설정 (텔레그램)**
+
+```bash
+# 1) 봇을 만들고 토큰을 받습니다 — 텔레그램에서 @BotFather → /newbot
+# 2) 그 봇에게 아무 말이나 한 번 보낸 뒤 chat_id를 확인합니다
+curl "https://api.telegram.org/bot<TOKEN>/getUpdates"   # result[].message.chat.id
+
+# 3) ~/.marketscan/.env 에 적습니다 (설정·전략·DB와 같은 곳)
+MARKETSCAN_TELEGRAM_TOKEN=123456:AA...
+MARKETSCAN_TELEGRAM_CHAT_ID=987654321
+
+# 4) 지금 확인합니다 — 스케줄 시각까지 기다리지 않습니다
+marketscan alert-test        # 화면에도 '테스트 알림 보내기' 버튼이 있습니다
+```
+
+> ⚠️ **토큰은 설정 파일(`config.yml`)이 아니라 환경변수로 받습니다**(규칙 7).
+> 설정 파일은 복사·공유되기 때문입니다. `.env`는 **실행 디렉터리와 `~/.marketscan/`**
+> 두 곳에서 읽습니다 — 후자에 두면 어디서 `serve`를 띄우든 잡힙니다.
 
 `serve`가 상주하면서 시장별 마감 뒤에 아래를 부릅니다. **어느 것도 새 동작이 아니고, 손으로
 치던 명령을 그대로 부를 뿐입니다.**
@@ -408,10 +530,9 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로 `--marke
 
 ## 할 일
 
-> **다음 작업은 Phase 3의 `3a. 데이터`부터입니다.** Phase 1·2는 끝났습니다.
-> 3a → 3b(`review`) → 3c(`serve`) 순서는 앞이 안 서면 뒤가 못 서기 때문입니다 —
-> 사후 수익률이 없으면 리뷰 화면에 그릴 것이 없고, `bar_time → 세션 날짜` 변환기가
-> 없으면 마커가 제 봉 위에 앉지 않습니다.
+> **다음 작업은 Phase 3.5(사후 검증)입니다.** Phase 1·2·3이 끝났습니다.
+> `review`를 없애며 비워 둔 자리 — 신호별 사후 수익률 → `stats`의 hit rate·IC →
+> 엔진 검증 4종 — 이 남아 있고, 그때까지 out-of-sample 검증이 얇습니다.
 
 ### Phase 0.5 — v0.5 전환 ✅ 완료
 
@@ -425,7 +546,7 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로 `--marke
 - [x] FastAPI · APScheduler 계층 제거 (`app/main.py` · `app/api/`)
 - [x] 디렉터리 평탄화 `backend/app/` → `app/`
 - [x] **`Strategy` 프로토콜** — `compute` / `rank` / `select` (§4.2)
-- [x] `strategies/` 로더 + 소스 SHA-256 기록 (§4.7)
+- [x] 전략 로더 + 소스 SHA-256 기록 (§4.7)
 - [x] `marketscan strategy check` — AST 인과성 검사 (`shift(-n)` · `center=True` · `datetime.now`)
 - [x] 타임프레임을 정책 계층에서 `1d`/`1w`로 제한 — **타입은 건드리지 않는다** (§3.6)
 - [x] `Indicator` 범주 동결 — `maFilter`는 남기고 신규 추가 금지
@@ -434,7 +555,7 @@ Fresh Bar Gate(§3.5)가 시장별 마감을 알아서 걸러 주므로 `--marke
 \* `ingest`는 Phase 0.5에서 명령 표면만 있었고, 실제 수집(`ohlcv_cache` · Ingestion Worker)은
 Phase 2에서 채워졌습니다.
 
-**완료 기준 ✅**: `marketscan run --dry-run`이 더미 전략(`strategies/demo_momentum.py`)으로 끝까지 돕니다.
+**완료 기준 ✅**: `marketscan run --dry-run`이 더미 전략(`sample/demo_momentum.py`)으로 끝까지 돕니다.
 
 ### Phase 1 — 전략 러너 & 단일 시장 E2E — **완료 기준 충족 · 결정 1건 남음**
 
@@ -445,7 +566,7 @@ Phase 2에서 채워졌습니다.
       차이는 `providers/ccxt_quirks/`로 뺐습니다
 - [x] `Symbol Universe` → `Market Data` → `Strategy Runner` → **HTML 리포트** E2E
       (텔레그램은 `serve`로 빠졌습니다 — Phase 1의 "동작하는 물건"은 리포트입니다)
-- [x] 첫 전략: 횡단면 모멘텀 12-1 — 표준값(252/21) 고정. `strategies/cross_momentum_12_1.py`
+- [x] 첫 전략: 횡단면 모멘텀 12-1 — 표준값(252/21) 고정. `sample/cross_momentum_12_1.py`
 - [x] ★ **`bar_state` 영속화** — `SqlBarState`가 봉 상태를 SQLite에 남깁니다.
       게이트가 프로세스를 넘어 살아남습니다 (§3.5)
 - [x] 캔들 마감 처리 · `signals`의 `acted` 응답 경로 (`marketscan signals ack`)
@@ -518,51 +639,53 @@ Phase 2에서 채워졌습니다.
 `--market crypto|krx|us`는 이 `venues` 목록도 함께 거릅니다 — 고정 목록만 걸러서는
 필터가 있다는 사실이 오히려 오해를 만듭니다. 백테스트 차단(규칙 14)은 그대로입니다.
 
-### Phase 3 — ★ 리뷰 & 상주 실행
+### Phase 3 — ★ 백테스트 & 상주 실행
 
-**이 프로젝트의 정체성이 완성되는 단계입니다.** `run`만 있으면 신호를 내보고 잊습니다.
-`review`가 있어야 "그래서 어떻게 됐나"가 남고, 그게 있어야 스크리너가 자신감 기계가 되지
-않습니다(§1.1).
+**3a. `backtest` — 날짜별 리플레이 + 차트 ✅ 완료**
 
-**3a. 데이터 — 리뷰가 읽을 것을 먼저 채웁니다**
+- [x] ★ **`bar_time` → 세션 날짜 변환기**(`session_date`) — `bar_time`은 세션 **마감** 시각이라
+      그대로 날짜로 자르면 **코인이 하루 어긋납니다**(업비트 8/2 봉이 8/3로 찍힘). 규칙은
+      `(bar_time − 1초)를 calendar.tz로 옮긴 날짜`. **봉과 마커가 같은 함수를 씁니다**
+- [x] `lightweight-charts` vendoring (`app/report/vendor/` + LICENSE) — **CDN 금지** (§2.1)
+- [x] **`marketscan backtest <종목> --start D`** — 그날까지의 봉만 잘라 전략을 다시 돌리고
+      조건 충족일에 마커 (§12.7). 부작용 없음
+- [x] **`compute` → `rank` → `select` 순서를 `run`과 공유**(`strategies/stages.py`) — 각자
+      적으면 언젠가 한쪽만 바뀌고, 그날부터 백테스트가 실거래와 다른 코드를 돕니다
+- [x] ★ **횡단면 컷 미적용 경고** — 종목 하나면 "상위 N개"의 후보가 1개라 항상 통과합니다.
+      리포트 배너와 CLI 출력 양쪽에 붙박이. 순위·백분위는 표에서 제외
+- [x] 종목별 `priceFormat` — 크기에서 자릿수를 유도 (코인이 전부 0으로 보이지 않게)
+
+**3b. `serve` — 웹 UI + 스케줄·알림 ✅ 완료**
+
+- [x] ★ **`app/service.py`** — 명령의 본체를 CLI에서 떼어냈습니다. **버튼과 터미널이 같은
+      코드를 지납니다** (갈라지면 규칙 11·13이 화면 쪽으로 우회됩니다)
+- [x] **`marketscan serve`** — FastAPI + Jinja 서버 렌더. 대시보드 · 실행 버튼 ·
+      **리포트 뷰어**. Node·pnpm·빌드 단계 없음
+- [x] 리포트 경로 가두기 · 실행 잠금(연타 방지) · 기본 바인딩 `127.0.0.1`
+- [x] **스케줄 + 알림 + ⚠️ 하루 1회 하트비트**(신호 0건이어도). 없으면 프로세스가 죽은 것과
+      신호가 없는 것이 구분되지 않습니다 (§8)
+- [x] `scheduleTrigger` 노드 — 파이프라인이 실행 시각을 갖습니다. 서머타임은 날마다
+      다시 계산해 넘깁니다
+- [x] ★ **켤 때 지난 슬롯을 몰아서 부르지 않습니다** — "직전 판단과 지금 사이를 지났는가"로
+      판정합니다. 아니면 저녁에 켠 순간 그날 슬롯이 전부 `--commit`으로 돕니다
+- [x] 텔레그램 채널(환경변수) · 토큰 없으면 기록만
+
+### Phase 3.5 — 사후 검증 (`review`를 없애고 남은 자리)
+
+⚠️ **`review`(신호 이력 + 이후 경로)는 만들지 않기로 했습니다.** `backtest`가 그 자리를
+대신하지 **않습니다** — 하나는 내가 고른 종목의 과거 재생이고, 다른 하나는 실제로 낸 신호의
+사후 성적입니다. 후자가 **진짜 out-of-sample**인데 지금 그걸 보는 화면이 없습니다.
+아래가 그 공백을 메우는 항목들입니다.
 
 - [ ] **신호별 사후 수익률** (`Forward Return Evaluator`) — `as_of`로부터 1·5·20봉 뒤 종가를
       캐시에서 찾아 `signals`에 채웁니다. **캐시가 붙어서 외부 호출이 필요 없습니다**
+- [ ] `stats`의 forward return · hit rate · IC (§4.8 신호 품질 지표)
 - [ ] **수집 대상에 "과거 신호 종목" 추가** (규칙 18) — 유니버스에서 밀린 종목의 봉이 끊기면
-      리뷰 차트가 거기서 멈추고, **하필 밀린 종목이 대개 내린 종목이라** 화면이 낙관 편향됩니다
+      차트가 거기서 멈추고, **하필 밀린 종목이 대개 내린 종목이라** 화면이 낙관 편향됩니다
 - [ ] **벤치마크 지수 수집** — KOSPI · S&P500 · BTC. §4.8의 "벤치마크 대비 초과수익"에
       필요한데 **지금은 하나도 안 모읍니다.** pykrx·FDR이 지수를 줍니다
-
-**3b. `review` — 정적 HTML + 차트**
-
-- [ ] ★ **`bar_time` → 세션 날짜 변환기** — `bar_time`은 세션 **마감** 시각이라 그대로 날짜로
-      자르면 **코인이 하루 어긋납니다**(업비트 8/2 봉이 8/3로 찍힘). 규칙은
-      `(bar_time − 1초)를 calendar.tz로 옮긴 날짜`. **봉과 마커가 같은 함수를 써야** 마커가
-      제 봉 위에 앉습니다
-- [ ] `lightweight-charts` vendoring (`app/report/vendor/` + LICENSE) — **CDN 금지** (§2.1)
-- [ ] **`marketscan review`** — 기간·전략·시장으로 걸러 신호 이력 + 이후 주가 경로를
-      정적 HTML로. 신호 시점에 마커 (§12.7)
-- [ ] 차트를 신호의 `meta["adjusted"]`와 **같은 키로** 조회 — 다르면 마커가 엉뚱한 가격에 뜹니다
-- [ ] 종목별 `priceFormat` — 규칙은 이미 `app/core/formatting.format_price`에 있습니다
-      (크기에서 자릿수를 유도). 차트 옵션으로 옮기기만 하면 됩니다
-- [ ] `stats`의 forward return · hit rate · IC (§4.8 신호 품질 지표)
-
-**3c. `serve` — 상주 실행**
-
-- [ ] **`marketscan serve`** — 스케줄 + 알림 + ⚠️ **하루 1회 하트비트**(신호 0건이어도).
-      없으면 프로세스가 죽은 것과 신호가 없는 것이 구분되지 않습니다 (§8)
-- [ ] `Schedule Trigger` 노드 · `Telegram Alert` 노드 (`sends_external_messages = True`)
-
-### Phase 3.5 — 백테스트
-
-**리뷰 다음입니다.** `review`가 진짜 out-of-sample이라 더 정직하고, 백테스트는 아무리 잘
-만들어도 과거를 되감는 일이라 의심할 것이 남습니다. 여기서의 용도는 **"내 구현이 안 틀렸나"**
-하나뿐입니다.
-
-- [ ] 캘린더 기반 리플레이 + look-ahead assert
-- [ ] **피처 행렬 사전 계산** — 유일한 실제 엔지니어링 (§4.8)
-- [ ] **엔진 검증 4종** — 난수 신호 · 전량 매수 · 신호 1일 밀기 · 상장폐지 포함
-- [ ] `backtest_runs` 다중검정 카운터
+- [ ] **엔진 검증 4종** — 난수 신호 · 전량 매수 · 신호 1일 밀기 · 상장폐지 포함.
+      **난수 신호의 hit rate가 기저율을 넘으면 미래 참조가 있는 것입니다**
 
 ### Phase 4 — LLM 스크리닝
 
@@ -593,7 +716,7 @@ Phase 2에서 채워졌습니다.
 | 명령 | 부작용 | 용도 |
 | :--- | :---: | :--- |
 | `run [--market M] [--commit]` | **`--commit` 시에만** | 파이프라인 실행. **기본은 dry-run** |
-| `review [--since D]` | 없음 | ★ **그래서 어떻게 됐나** — 신호 이력 + 차트 (Phase 3) |
+| `backtest <종목> --start D` | 없음 | ★ **그날 이 종목은 어땠나** — 날짜별 리플레이 + 차트 |
 | `serve` | **알림 발송** | 스케줄 + 알림 + 하트비트. **알림이 나가는 유일한 명령** (Phase 3) |
 | `ingest [--venue V] [--commit]` | **`--commit` 시에만** | 일봉 수집 → `ohlcv_cache`. **기본은 계획만** |
 | `explain <signal_id>` | 없음 | **왜 이 신호가 났는가** — 전략·해시·순위·소스·폴백 |
@@ -610,9 +733,11 @@ LLM에게 한국어 표를 파싱하게 두면 오독하기 때문입니다(§12
 
 | 변수 | 기본값 |
 | :--- | :--- |
-| `MARKETSCAN_PIPELINE_PATH` | `pipelines/trend.yaml` |
-| `MARKETSCAN_STRATEGIES_DIR` | `strategies` |
-| `MARKETSCAN_DATABASE_URL` | `sqlite+aiosqlite:///./data/marketscan.db` |
+| `MARKETSCAN_CONFIG_DIR` | `~/.marketscan` |
+| `MARKETSCAN_PIPELINE_PATH` | `config.yml` (설정 디렉터리 기준) |
+| `MARKETSCAN_STRATEGIES_DIR` | (없음 — 파이프라인 파일과 같은 디렉터리) |
+| `MARKETSCAN_DATABASE_URL` | `sqlite+aiosqlite:///./data/marketscan.db` (설정 디렉터리 기준) |
+| `MARKETSCAN_REPORTS_DIR` | `reports` (설정 디렉터리 기준) |
 
 **시세에는 자격 증명이 필요 없습니다** — 일봉 고정으로 무인증 소스만 씁니다
 (PyKRX · yfinance · FDR · CCXT 공개 OHLCV). 남는 비밀은 텔레그램 토큰과 LLM 키뿐입니다.
@@ -627,19 +752,31 @@ uv run pytest -q     # 테스트
 uv run ruff check app tests
 ```
 
+**알고 있는 의존성 부채 하나** — `pykrx`를 1.0.x에 묶어 두고 `setuptools<81`을 함께
+답니다. pykrx 1.0.x가 임포트 시점에 `pkg_resources`를 부르기 때문입니다. 1.2.3부터
+그게 없어졌지만 **같은 릴리스가 `pandas<3.0`을 요구해서**, 올리면 pandas가 메이저로
+내려갑니다. 소스 하나 때문에 코어 라이브러리를 되돌릴 일은 아니라고 보고 미뤄 둔
+상태입니다. **재검토 조건: pykrx가 pandas 3을 허용하면** 올리고 `setuptools` 핀과
+`pykrx_source.py`의 경고 필터를 함께 지웁니다.
+
 ---
 
 ## 프로젝트 구조
 
 ```
+~/.marketscan/                 ★ 사용자 자산 (백업 대상) — 저장소 바깥에 있다
+├── config.yml                 기본 설정 (MARKETSCAN_PIPELINE_PATH로 바꾼다)
+├── <전략>.py                  파일 하나 = 전략 하나. 해시가 실행에 박힌다
+├── data/marketscan.db         ohlcv_cache · signals · 실행 이력 (--commit 실행에서만 생성)
+└── reports/                   실행 리포트 HTML — latest.html + run_<id>.html
+
 marketscan/
 ├── ARCHITECTURE.md            설계 문서 (단일 출처)
 ├── CLAUDE.md                  작업 규칙
-├── pipelines/                 파이프라인 정의 (YAML 확정 — §6 스키마 그대로)
-│   ├── trend.yaml             ★ 기본값 — 추세추종 55일 돌파
-│   └── demo.yaml              12-1 횡단면 모멘텀
-├── strategies/                ★ 사용자 전략 — 파일 하나 = 전략 하나. 해시가 실행에 박힌다
-├── data/                      SQLite (백업 대상 · --commit 실행에서만 생성)
+├── sample/                    설정·전략 예제 한 벌. ~/.marketscan/으로 복사해 쓴다
+│   ├── config.yml             ★ 기본 설정 — 추세추종 55일 돌파 (§6 스키마 그대로)
+│   ├── demo.yaml              12-1 횡단면 모멘텀
+│   └── *.py                   그 설정들이 부르는 전략 — **설정 파일 옆**에서 찾는다
 └── app/
     ├── cli/                   Typer 명령 · 출력 규약 · 종료 코드
     ├── engine/                Bundle·Item 계약, RunContext, DAG 검증·실행, 신호 배출구
@@ -648,7 +785,10 @@ marketscan/
     ├── providers/             시세 소스 + 라우팅·폴백 · 캐시 계층(ohlcv_source · universe_source)
     ├── ingest/                Ingestion Worker — 수집 대상 도출·수집 (§3.9)
     ├── nodes/                 배선용 노드 (트리거·입력·전략·로직·액션)
-    ├── report/                자기완결 HTML — run_report · review_report(P3) · vendor/
+    ├── report/                자기완결 HTML — run_report · backtest_report · vendor/(차트)
+    ├── web/                   ★ serve의 화면 — FastAPI 라우트 + Jinja 템플릿
+    ├── backtest/              날짜별 리플레이
+    ├── service.py             ★ 명령의 본체 — CLI도 웹도 여기를 지납니다
     ├── core/                  config · formatting(가격·시각 표기의 단일 출처)
     └── storage/               SQLAlchemy 모델 · 실행 이력 · 신호 · ohlcv_cache · instruments
 ```

@@ -110,7 +110,7 @@ def draft_from_item(
     """Item 하나를 신호로 옮긴다. OHLCV 원본은 옮기지 않는다 (12.4)."""
     meta = dict(item.meta)
     # `005930`보다 `삼성전자`가 읽힌다. 신호에 박아 두지 않으면 나중에 `explain`·
-    # `review`가 이름을 얻으려고 종목 목록을 다시 조회해야 한다.
+    # 사후에 이름을 얻으려고 종목 목록을 다시 조회해야 한다.
     if item.instrument.display_name and item.instrument.display_name != item.instrument.symbol:
         meta["display_name"] = item.instrument.display_name
 

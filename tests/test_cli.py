@@ -10,13 +10,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from app.cli import main as cli_main
-from app.core.config import get_settings
+from app.core.config import SAMPLE_DIR, get_settings
 from app.storage import db
 
 runner = CliRunner()
@@ -62,6 +63,9 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     settings = get_settings()
     monkeypatch.setattr(settings, "pipeline_path", pipeline_path)
+    # 전략은 파이프라인 파일 옆에서 찾는 것이 기본이다. 여기서는 파이프라인만
+    # tmp_path로 옮기므로 전략 디렉터리를 저장소 예제로 못 박는다.
+    monkeypatch.setattr(settings, "strategies_dir", SAMPLE_DIR)
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}")
     yield tmp_path
     db.configure(get_settings().database_url)
@@ -256,6 +260,9 @@ def test_limit_caps_signal_output(workspace: Path):
 
 def test_ohlcv_is_never_in_the_default_output(workspace: Path):
     body = payload(invoke("run", "--now", NOW, "--json"))
+    # 리포트 경로는 뺀다 — 임시 디렉터리 이름이 이 테스트의 이름을 포함해서
+    # (pytest가 그렇게 짓는다) 경로만으로 "ohlcv"가 잡힌다.
+    body.pop("report", None)
     assert "ohlcv" not in json.dumps(body)
 
 
@@ -383,12 +390,38 @@ def test_yaml_pipeline_is_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     path = tmp_path / "pipeline.yaml"
     path.write_text(yaml.safe_dump(PIPELINE, allow_unicode=True), encoding="utf-8")
+    # 전략은 설정 파일 **옆**에서 찾는다. 설정만 옮기면 전략을 못 찾는 것이 정상이다.
+    shutil.copy(SAMPLE_DIR / "demo_momentum.py", tmp_path / "demo_momentum.py")
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'y.db').as_posix()}")
 
     body = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
 
     assert body["pipeline_id"] == "pipe_test"
     assert body["signal_count"] > 0
+    db.configure(get_settings().database_url)
+
+
+def test_strategy_is_looked_up_next_to_the_pipeline_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """설정과 전략은 한 디렉터리에 산다 — 설정만 옮기면 전략을 못 찾는다.
+
+    이것이 `~/.marketscan/config.yml`과 저장소의 `sample/`을 같은 방식으로
+    다루게 하는 규칙이다. 조용히 다른 디렉터리로 물러서면 **어느 파일이 돈
+    전략인지** 알 수 없게 되고, 소스 해시를 기록하는 의미가 사라진다 (§4.7).
+    """
+    import yaml
+
+    path = tmp_path / "pipeline.yaml"
+    path.write_text(yaml.safe_dump(PIPELINE, allow_unicode=True), encoding="utf-8")
+    db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'n.db').as_posix()}")
+
+    body = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
+    node = next(n for n in body["nodes"] if n["node_id"] == "strategy")
+
+    assert body["signal_count"] == 0
+    assert "전략을 찾을 수 없습니다" in str(node.get("error"))
+    assert str(tmp_path) in str(node.get("error"))  # 어디서 찾았는지 말해 준다
     db.configure(get_settings().database_url)
 
 
@@ -536,3 +569,53 @@ def test_market_filter_narrows_the_dynamic_universe(workspace: Path):
     assert "venues[upbit]" in dropped
     # 동적 조회가 남아 있으면 "종목 0개"로 보이더라도 빈 유니버스가 아니다
     assert pipeline_file.has_empty_universe(filtered) is False
+
+
+# -------------------------------------------------------------------------- 백테스트
+def test_backtest_marks_days_and_writes_a_report(workspace: Path):
+    """`backtest`는 날짜별로 전략을 돌리고 리포트를 남긴다 (§12.7)."""
+    body = payload(
+        invoke(
+            "backtest", "krx:005930",
+            "--start", "2026-02-02", "--end", "2026-03-02", "--json",
+        )
+    )
+
+    assert body["ok"] is True
+    assert body["instrument"] == "krx:005930"
+    assert body["strategy_id"] == "demo_momentum"
+    assert body["judged_days"] > 0
+    # ★ 단일 종목이라 횡단면 컷이 걸리지 않았다는 사실이 스키마에 남아야 한다.
+    assert body["cut_applied"] is False
+    assert Path(body["report"]).exists()
+
+
+def test_backtest_leaves_no_signals_behind(workspace: Path):
+    """부작용이 없다 — signals에 남지 않는다 (백테스트는 판단이 아니다)."""
+    invoke("backtest", "krx:005930", "--start", "2026-02-02", "--end", "2026-03-02")
+
+    assert payload(invoke("signals", "list", "--json"))["count"] == 0
+
+
+def test_backtest_rejects_a_bad_date(workspace: Path):
+    result = invoke("backtest", "krx:005930", "--start", "2026년 2월")
+    assert result.exit_code == 3
+
+
+def test_backtest_rejects_an_inverted_range(workspace: Path):
+    result = invoke(
+        "backtest", "krx:005930", "--start", "2026-03-02", "--end", "2026-02-02"
+    )
+    assert result.exit_code == 3
+
+
+def test_backtest_uses_the_pipeline_params(workspace: Path):
+    """설정 파일의 파라미터로 돈다 — 전략 기본값으로 돌면 다른 것을 검증하게 된다."""
+    body = payload(
+        invoke(
+            "backtest", "krx:005930",
+            "--start", "2026-02-02", "--end", "2026-03-02", "--json",
+        )
+    )
+
+    assert body["params"]["top_pct"] == 1.0  # PIPELINE이 준 값

@@ -101,7 +101,8 @@ class RunContext:
     실행과 자동으로 도는 실행은 오발송의 무게가 다르고, 손으로 돌릴 때마다
     채널로 메시지가 나가면 알림 자체를 신뢰하지 않게 된다.
 
-    ⚠️ `serve`는 아직 없다 (ARCHITECTURE.md 11장 4b). 그때까지 이 값은 항상 False다.
+    ⚠️ **이 값을 켜는 자리는 `app/serve.py`의 스케줄 발화 하나뿐이다.** 웹 UI의
+    버튼도 켜지 않는다 — 화면에서 누른 것도 사람이 손으로 부른 실행이다.
     """
 
     log: NodeLogger = field(default_factory=NodeLogger)

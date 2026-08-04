@@ -5,7 +5,8 @@
 *.pem
 
 # --- 데이터 ---
-# ohlcv_cache / signals 등이 담긴 로컬 DB
+# 정본은 ~/.marketscan/data/ 다 (저장소 바깥이라 여기 걸릴 일이 없다).
+# 아래는 MARKETSCAN_CONFIG_DIR을 저장소 안으로 돌렸을 때를 위한 안전망이다.
 data/
 *.db
 *.db-wal
@@ -24,7 +25,7 @@ dist/
 build/
 
 # --- 산출물 ---
-# 백테스트·실행 리포트 정적 HTML. 재생성 가능하므로 커밋하지 않는다.
+# 정본은 ~/.marketscan/reports/ 다. 아래는 위와 같은 안전망.
 reports/
 
 # --- 에디터 / OS ---

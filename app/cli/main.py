@@ -1,11 +1,8 @@
 """marketscan CLI (ARCHITECTURE.md 12장).
 
-상주 프로세스도 웹 서버도 없다. 무언가가 하루 몇 번 `marketscan run --commit`을
-부르고, 사람과 LLM은 같은 CLI로 그 결과에 질문한다.
-
-⚠️ **그 "무언가"가 무엇인지는 아직 정하지 않았다** — OS 스케줄러에 맡길지,
-스케줄과 알림을 함께 갖는 `serve` 명령을 둘지는 미결정이다 (ARCHITECTURE.md 11장).
-어느 쪽이든 이 CLI의 표면은 바뀌지 않으므로 지금 정하지 않는다.
+사람과 LLM이 같은 표면으로 결과에 질문한다. `serve`가 같은 명령을 웹 화면으로도
+띄우지만, **실행 본체는 양쪽 모두 `app/service.py`를 지난다** — 화면에서 누른 것과
+터미널에서 친 것이 다른 일을 하면 규칙 11·13이 화면 쪽으로 우회된다.
 
 **읽기 전용이 기본이다.** `explain` · `signals` · `stats` · `describe` ·
 `strategy check`는 부작용이 없고, `run`은 `--commit` 없이는 알림도 기록도 하지
@@ -16,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
@@ -24,30 +21,25 @@ from zoneinfo import ZoneInfo
 import typer
 
 import app.nodes  # noqa: F401  — @register 실행 (노드 레지스트리 채우기)
+from app import service
+from app.alerts import default_channel
+from app.backtest import ReplayResult
 from app.cli import pipeline_file
 from app.cli.output import ExitCode, Out, table
 from app.cli.templates import STRATEGY_TEMPLATE
 from app.core.config import get_settings
 from app.core.formatting import (
+    format_price,
     format_price_change,
     format_time,
     timezone_label,
 )
-from app.engine.context import RunContext
 from app.engine.graph import PipelineValidationError, validate
-from app.engine.runner import NodeStatus, RunResult, RunStatus, execute
-from app.engine.signals import CollectingSink
-from app.engine.state import InMemoryBarState
-from app.ingest import worker
+from app.engine.runner import NodeStatus, RunStatus
 from app.market.timeframe import JUDGEMENT
 from app.nodes.registry import catalog
-from app.providers.ohlcv_source import CachedSource, DirectSource
-from app.providers.universe_source import CachedUniverse, DirectUniverse
-from app.report.run_report import ReportInput, report_path, write_run_report
 from app.schemas.pipeline import ExecutionMode, PipelineSettings, PipelineSpec
 from app.storage import db, history
-from app.storage.bar_state import SqlBarState, sqlite_path
-from app.storage.history import SqlSignalSink
 from app.strategies.check import check_file
 from app.strategies.registry import (
     StrategyError,
@@ -126,8 +118,8 @@ def run(
             out.emit({"ok": True, "status": "skipped", "market": market, "signals": []})
             raise typer.Exit(int(ExitCode.OK))
 
-    result, sink, ctx = asyncio.run(_execute(out, spec, mode, now, commit))
-    _report_run(out, result, sink, ctx, spec, dropped, limit, report)
+    outcome = asyncio.run(_execute(out, spec, mode, now, commit))
+    _report_run(out, outcome, spec, dropped, limit, report)
 
 
 async def _execute(
@@ -136,184 +128,38 @@ async def _execute(
     mode: ExecutionMode | None,
     now_raw: str | None,
     commit: bool,
-) -> tuple[RunResult, Any, RunContext]:
-    resolved_mode = mode or spec.settings.default_mode
-    now = _parse_now(out, now_raw)
+) -> service.RunOutcome:
+    """실행 본체는 `app/service.py`에 있다 — 웹 UI도 **같은 함수**를 부른다.
 
-    sink: Any = CollectingSink()
-    # 캐시 쓰기는 dry-run에서도 열려 있으므로(`_ohlcv_source`) 테이블을 먼저 만든다.
-    await db.init_db()
-    if commit and resolved_mode is not ExecutionMode.BACKTEST:
-        sink = SqlSignalSink(db.get_sessionmaker())
-
-    ctx = RunContext.create(
-        settings=spec.settings,
-        mode=resolved_mode,
-        now=now,
-        pipeline_id=spec.pipeline_id,
-        bar_state=_bar_state(out, spec.pipeline_id, commit),
-        signals=sink,
-        commit=commit,
-    )
-    # 레지스트리는 RunContext가 만든 것을 그대로 쓴다 — 소스 구성의 단일 출처가
-    # 한 곳이어야 테스트가 네트워크를 막을 수 있다 (tests/conftest.py).
-    ctx.ohlcv = _ohlcv_source(ctx.providers, spec, commit)
-    ctx.universe = _universe_source(ctx.providers, ctx.now)
-
-    if commit:
-        async with db.session_scope() as session:
-            await history.start_run(
-                session, run_id=ctx.run_id, spec=spec, mode=str(resolved_mode), as_of=ctx.now
-            )
-            await _snapshot_strategies(session, spec)
-
+    여기 남은 것은 CLI의 몫뿐이다: 시각 파싱, 검증 실패의 종료 코드, 경고 출력.
+    """
     try:
-        result = await execute(spec, ctx)
+        return await service.execute_run(
+            spec,
+            mode=mode,
+            now=_parse_now(out, now_raw),
+            commit=commit,
+            warn=out.warn,
+        )
     except PipelineValidationError as exc:
-        out.fail(
-            ExitCode.VALIDATION,
-            str(exc),
-            {"issues": exc.result.to_dict()["issues"]},
-        )
+        out.fail(ExitCode.VALIDATION, str(exc), {"issues": exc.result.to_dict()["issues"]})
         raise  # pragma: no cover - fail이 이미 Exit를 던진다
-    else:
-        # 노드별 스냅샷이 있어야 `explain`이 "왜 이 신호가 났는가"를 돌려준다 (4.9).
-        if commit:
-            async with db.session_scope() as session:
-                await history.finish_run(session, result)
-    finally:
-        # CCXT가 연 aiohttp 세션을 닫는다. 남기면 종료 시 경고가 뜬다.
-        await ctx.providers.close()
-        closer = getattr(ctx.bar_state, "close", None)
-        if closer is not None:
-            closer()
-        # dry-run도 캐시를 읽느라 엔진을 열었을 수 있다. 엔진이 없으면 무해하다.
-        await db.dispose()
-    return result, sink, ctx
-
-
-def _ohlcv_source(providers: Any, spec: PipelineSpec, commit: bool) -> Any:
-    """봉을 어디서 얻을지 고른다 (3.9).
-
-    ★ **dry-run도 캐시에 쓴다.** 규칙 11이 막는 것은 **되돌릴 수 없는 것** 셋이다 —
-    알림 발송, `signals` 기록, 봉 소비. 봉을 캐시에 넣는 것은 그중 어느 것도 아니다:
-    판단이 아니라 **자료 축적**이고, 어차피 `ingest`가 쓸 것을 미리 쓰는 것뿐이다.
-    받아 놓고 버리면 무료 API를 두 번 두드리게 되는데, 그 호출을 아끼는 것이 3.9의
-    존재 이유다.
-
-    **`run`(dry-run)과 `explain`(읽기 전용)은 다르다.** 앞은 "부작용 없이 실행해
-    본다"이고 뒤는 "조회만 한다"다. 12.1의 "DB 파일조차 만들지 않는다"는 뒤쪽 명령의
-    규약이고, 그건 그대로다.
-    """
-    path = sqlite_path(db.database_url())
-    if path is None:
-        return DirectSource(providers, default_adjusted=spec.settings.adjusted)
-    return CachedSource(
-        providers,
-        db.get_sessionmaker(),
-        writable=True,
-        default_adjusted=spec.settings.adjusted,
-    )
-
-
-def _universe_source(providers: Any, now: datetime) -> Any:
-    """종목 목록을 어디서 얻을지 고른다 (4.7).
-
-    캐시가 아끼는 것은 **거래대금이 없는 목록**뿐이다 — 미국 목록(FDR 6,700행)이
-    가장 무거운 호출이라 이득의 대부분이 거기 있다. `top_by_turnover`를 거는
-    venue는 노드가 `needs_turnover=True`로 불러 캐시를 건너뛴다.
-    """
-    if sqlite_path(db.database_url()) is None:
-        return DirectUniverse(providers)
-    return CachedUniverse(providers, db.get_sessionmaker(), now=now)
-
-
-def _bar_state(out: Out, pipeline_id: str, commit: bool) -> Any:
-    """실행에 맞는 봉 상태 저장소를 고른다 (3.5 / `app/engine/state.py` 표 참조).
-
-    dry-run에서도 **읽기는 한다.** 읽지 않으면 `run`과 `run --commit`이 서로 다른
-    종목 집합을 보게 되어, dry-run이 실제 실행을 예측하지 못한다.
-    """
-    path = sqlite_path(db.database_url())
-    if path is None:
-        out.warn(
-            "SQLite가 아니어서 Fresh Bar Gate가 프로세스 메모리에만 남습니다 — "
-            "같은 봉이 반복 판정될 수 있습니다 (중복 신호는 dedup_key가 막습니다)."
-        )
-        return InMemoryBarState()
-    if not commit and not path.exists():
-        # 읽기 전용 실행이 DB 파일을 만들면 규칙 11이 깨진다 (12.1).
-        return InMemoryBarState()
-    return SqlBarState(path, pipeline_id, readonly=not commit)
-
-
-async def _snapshot_strategies(session: Any, spec: PipelineSpec) -> None:
-    """전략 소스 전문을 해시 기준으로 보관한다 (4.7).
-
-    파일을 고치면 과거 실행의 근거가 소급으로 바뀌므로, 커밋 실행마다 그 시점의
-    코드를 남긴다. 이미 있는 해시면 아무 일도 하지 않는다.
-    """
-    for strategy_id in pipeline_file.strategy_ids(spec):
-        try:
-            loaded = load_strategy(strategy_id)
-        except StrategyError:
-            continue  # 실행 단계에서 노드가 제대로 된 오류를 낸다
-        await history.snapshot_strategy(
-            session,
-            strategy_id=strategy_id,
-            sha256=loaded.sha256,
-            source=loaded.source.path.read_text(encoding="utf-8"),
-        )
-
-
-def _write_report(
-    out: Out,
-    result: RunResult,
-    signals: list[dict[str, Any]],
-    ctx: RunContext,
-    spec: PipelineSpec,
-) -> Path | None:
-    """정적 HTML 리포트를 남긴다.
-
-    파일 쓰기지만 `--commit` 뒤에 두지 않았다. `reports/`는 재생성 가능하고
-    gitignore 대상이며, 무엇도 되돌릴 수 없게 만들지 않기 때문이다 — 위험한
-    부작용은 알림 발송·`signals` 기록·봉 소비 셋이고 그건 그대로 `--commit`이 막는다.
-    실패해도 실행 자체를 실패로 만들지 않는다. 리포트는 산출물이지 판단이 아니다.
-    """
-    try:
-        path = report_path(result.run_id, committed=ctx.commit)
-        return write_run_report(
-            ReportInput(
-                result=result,
-                signals=signals,
-                committed=ctx.commit,
-                pipeline_name=spec.name,
-                user_timezone=spec.settings.user_timezone,
-            ),
-            path,
-        )
-    except OSError as exc:
-        out.warn(f"리포트를 쓰지 못했습니다 ({exc}). 실행 결과 자체는 유효합니다.")
-        return None
 
 
 def _report_run(
     out: Out,
-    result: RunResult,
-    sink: Any,
-    ctx: RunContext,
+    outcome: service.RunOutcome,
     spec: PipelineSpec,
     dropped: list[str],
     limit: int,
     report: bool,
 ) -> None:
-    drafts = getattr(sink, "drafts", [])
+    result = outcome.result
     # 리포트에는 --limit과 무관하게 전부 싣는다. stdout은 좁게, 파일은 넓게가
     # 맞는 배분이다 — 좁혀야 하는 쪽은 사람과 LLM이 읽는 화면이다 (12.4).
-    all_signals = [d.to_dict() for d in drafts]
-    signals = all_signals[:limit]
+    signals = outcome.signals[:limit]
     failed = [n for n in result.nodes if n.status is NodeStatus.ERROR]
-    written = _write_report(out, result, all_signals, ctx, spec) if report else None
+    written = service.write_report(outcome, spec, out.warn) if report else None
 
     payload = {
         "ok": result.status is not RunStatus.FAILED and not failed,
@@ -322,10 +168,10 @@ def _report_run(
         "mode": result.mode,
         "now": result.now,
         "status": str(result.status),
-        "committed": ctx.commit,
+        "committed": outcome.committed,
         "signals": signals,
-        "signal_count": getattr(sink, "written", len(drafts)),
-        "truncated": max(0, len(drafts) - limit),
+        "signal_count": outcome.written,
+        "truncated": max(0, len(outcome.signals) - limit),
         "report": str(written) if written else None,
         "alerts_sent": False,  # 단일 실행은 외부로 아무것도 내보내지 않는다
         "nodes": [
@@ -373,7 +219,7 @@ def _report_run(
 
     if written:
         human += ["", f"리포트 {written}"]
-    if not ctx.commit:
+    if not outcome.committed:
         human += ["※ dry-run입니다. signals 미기록 · 봉 미소비 (--commit으로 실행)."]
     if dropped:
         out.warn(f"--market 필터로 {len(dropped)}개 종목을 제외했습니다.")
@@ -385,6 +231,235 @@ def _report_run(
         # 4.1이 "빈 Bundle도 정상"이라고 정했으므로 신호 0건은 여기 오지 않는다.
         # 여기 오는 것은 소스나 노드가 실제로 터진 경우뿐이다 (12.3).
         raise typer.Exit(int(ExitCode.DATA))
+
+
+# ========================================================================== backtest
+@cli.command()
+def backtest(
+    instrument: Annotated[
+        str, typer.Argument(help="종목. 'krx:005930' 또는 심볼·이름 ('005930' · '삼성전자')")
+    ],
+    start: Annotated[
+        str, typer.Option("--start", help="시작일. 20251201 또는 2025-12-01")
+    ],
+    end: Annotated[
+        str | None, typer.Option("--end", help="종료일. 기본은 오늘")
+    ] = None,
+    strategy: Annotated[
+        str | None, typer.Option("--strategy", help="전략 id. 기본은 설정 파일의 전략")
+    ] = None,
+    pipeline: Annotated[Path | None, typer.Option("--pipeline", "-p")] = None,
+    report: Annotated[
+        bool, typer.Option("--report/--no-report", help="정적 HTML 리포트를 씁니다")
+    ] = True,
+    as_json: JsonOpt = False,
+    limit: LimitOpt = 20,
+) -> None:
+    """한 종목을 `--start`부터 하루씩 되감아 전략을 돌립니다.
+
+    그날까지 마감된 봉만 잘라서 전략에 넣으므로 미래를 볼 수 없습니다. 조건을
+    만족한 날이 차트에 마커로 찍힙니다.
+
+    ⚠️ **마커는 "조건 충족일"이지 "실제 신호일"이 아닙니다** — 종목 하나만 보면
+    횡단면 컷(상위 N개)의 후보가 1개라 항상 통과합니다. 리포트 상단에 같은
+    경고가 있습니다.
+
+    부작용은 없습니다 — `signals`를 남기지 않고 봉도 소비하지 않습니다.
+    """
+    out = Out(as_json)
+    spec = _load_spec(out, pipeline)
+    start_date = _parse_date(out, start, "--start")
+    end_date = _parse_date(out, end, "--end") if end else datetime.now(UTC).date()
+
+    result = _service_call(
+        out,
+        service.execute_backtest(
+            spec,
+            instrument=instrument,
+            start=start_date,
+            end=end_date,
+            strategy_id=strategy,
+            warn=out.warn,
+            progress=out.progress,
+        ),
+    )
+    _report_backtest(out, result, spec, report, limit)
+
+
+def _report_backtest(
+    out: Out, result: ReplayResult, spec: PipelineSpec, report: bool, limit: int
+) -> None:
+    written = service.write_backtest(result, spec, out.warn) if report else None
+
+    payload = {"ok": True, **result.to_dict(), "report": str(written) if written else None}
+    payload["signals"] = payload["signals"][:limit]
+    payload["truncated"] = max(0, len(result.signal_days) - limit)
+
+    tz = spec.settings.user_timezone
+    label = timezone_label(tz)
+    human = [
+        f"백테스트 {result.instrument.key}"
+        f"{f' ({result.instrument.display_name})' if result.instrument.display_name else ''}"
+        f" · {result.strategy_id} @ {result.strategy_sha256[:12]}",
+        f"기간 {result.start} ~ {result.end} · 판정 {len(result.days)}일 "
+        f"· 워밍업 부족 {result.skipped_warmup}일 (필요 {result.startup_candles}봉)",
+        "",
+    ]
+    rows = [
+        [
+            str(d.session),
+            format_time(d.as_of, tz),
+            format_price(d.close),
+            _feature_digest(d.features),
+        ]
+        for d in result.signal_days[:limit]
+    ]
+    human.extend(
+        table(rows, ["세션", f"봉 마감 ({label})", "종가", "근거"])
+        or ["조건을 만족한 날이 없습니다 — 0건은 실패가 아닙니다."]
+    )
+    if written:
+        human += ["", f"리포트 {written}"]
+    human += [
+        "※ 마커는 '조건 충족일'입니다. 종목 하나만 보면 횡단면 컷(상위 N개)이 "
+        "적용되지 않아, 실제 실행에서는 다른 종목에 밀렸을 수 있습니다."
+    ]
+    out.emit(payload, human)
+
+
+def _feature_digest(features: dict[str, Any]) -> str:
+    """표 한 칸에 들어갈 근거 요약. 숫자 피처 3개까지."""
+    parts = [
+        f"{k}={v:,.4g}" if isinstance(v, float) else f"{k}={v}"
+        for k, v in features.items()
+        if isinstance(v, int | float) and not isinstance(v, bool)
+    ]
+    return " · ".join(parts[:3]) or "-"
+
+
+def _service_call(out: Out, coro: Any) -> Any:
+    """서비스 호출을 CLI의 종료 코드로 번역한다.
+
+    서비스는 종료 코드를 모른다(표현은 부르는 쪽의 몫이다). 대신 `ServiceError`에
+    실린 `kind`를 보고 여기서 갈라 준다 — 메시지 문자열로 분기하면 문구를 고치는
+    순간 자동 실행의 판단이 바뀐다 (12.3).
+    """
+    try:
+        return asyncio.run(coro)
+    except service.ServiceError as exc:
+        code = ExitCode.DATA if exc.kind == "data" else ExitCode.VALIDATION
+        out.fail(code, str(exc))
+        raise  # pragma: no cover - fail이 이미 Exit를 던진다
+
+
+def _parse_date(out: Out, raw: str, flag: str) -> date:
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw.strip(), fmt).date()
+        except ValueError:
+            continue
+    out.fail(
+        ExitCode.VALIDATION,
+        f"{flag}의 날짜 형식이 잘못됐습니다: {raw!r}. 20251201 또는 2025-12-01로 적으세요.",
+    )
+    raise  # pragma: no cover - fail이 이미 Exit를 던진다
+
+
+# ==================================================================== alert-test
+@cli.command("alert-test")
+def alert_test(as_json: JsonOpt = False) -> None:
+    """알림 채널로 테스트 메시지를 한 통 보냅니다.
+
+    설정한 토큰이 맞는지 **스케줄 시각까지 기다려야 알 수 있으면** 설정이 반쯤
+    끝난 것이다 — 그래서 이 명령이 있습니다. 토큰이 없으면 아무 데도 보내지 않고
+    그 사실을 알려 줍니다.
+
+    ⚠️ 이 명령은 예외적으로 바깥으로 나갑니다(§12.2의 "알림은 `serve`만"). 사람이
+    **채널을 시험하려고 명시적으로** 부른 것이고, 신호가 아니라 테스트 문구를 보냅니다.
+    """
+    out = Out(as_json)
+    channel = default_channel()
+    if channel.id == "log":
+        out.fail(
+            ExitCode.VALIDATION,
+            "보낼 채널이 없습니다 — MARKETSCAN_TELEGRAM_TOKEN·MARKETSCAN_TELEGRAM_CHAT_ID를 "
+            f"설정하세요 ({get_settings().resolve('.env')} 또는 환경변수).",
+        )
+    stamp = format_time(datetime.now(UTC))
+    delivery = asyncio.run(channel.send(f"🔔 marketscan 테스트 알림 ({stamp})"))
+    if not delivery.ok:
+        out.fail(ExitCode.DATA, f"보내지 못했습니다 — {delivery.error}")
+    out.emit(
+        {"ok": True, "channel": channel.id, "sent_at": delivery.at.isoformat()},
+        [f"{channel.id} 채널로 보냈습니다. 받은 메시지를 확인하세요."],
+    )
+
+
+# =========================================================================== serve
+@cli.command()
+def serve(
+    host: Annotated[
+        str, typer.Option("--host", help="바인딩 주소. 기본은 이 컴퓨터에서만 열립니다.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    reload: Annotated[bool, typer.Option("--reload", help="개발용 자동 재시작")] = False,
+) -> None:
+    """상주 실행 — 웹 UI + 스케줄 + 알림 + 하트비트.
+
+    설정의 `scheduleTrigger`가 정한 시각에 `run --commit`을 부르고, **신호가
+    0건이어도 하루 1회 하트비트를 보냅니다** — 없으면 "신호가 없는 것"과 "프로세스가
+    죽은 것"이 구분되지 않습니다.
+
+    ⚠️ **알림이 나가는 유일한 명령입니다.** 화면에서 손으로 누른 실행은 보내지
+    않습니다 — 손으로 돌릴 때마다 채널로 나가면 알림을 믿지 않게 됩니다.
+
+    ⚠️ **기본 바인딩이 `127.0.0.1`입니다.** 이 프로세스는 `~/.marketscan` 전체에
+    접근할 수 있고 화면에서 `--commit` 실행까지 부를 수 있으므로, 인증 없이
+    `0.0.0.0`에 여는 것은 그 권한을 네트워크에 그대로 내주는 것입니다.
+    """
+    import uvicorn
+
+    from app.alerts import default_channel
+    from app.schedule import Schedule
+
+    out = Out(False)
+    out.progress(f"http://{host}:{port} 에서 UI를 엽니다. 종료는 Ctrl+C.")
+
+    # 스케줄이 없거나 채널이 없으면 **시작할 때** 말한다. 하루가 지난 뒤
+    # "왜 아무것도 안 왔지"가 되면 늦다 (미구현을 성공처럼 보이지 않게 한다).
+    try:
+        schedule = Schedule.from_spec(pipeline_file.load())
+    except Exception as exc:  # noqa: BLE001
+        schedule = None
+        out.warn(f"설정을 읽지 못해 스케줄이 돌지 않습니다 — {exc}")
+    if schedule is None:
+        out.warn("설정에 scheduleTrigger가 없어 **화면만** 뜹니다 (자동 실행 없음).")
+    else:
+        for line in schedule.describe():
+            out.progress(f"  스케줄 {line}")
+        if schedule.heartbeat is None:
+            out.warn(
+                "하트비트가 없습니다. 프로세스가 조용히 죽으면 '신호 0건'과 구분되지 "
+                "않습니다 — scheduleTrigger에 heartbeat를 넣으세요."
+            )
+    if default_channel().id == "log":
+        out.warn(
+            "텔레그램 토큰이 없어 알림을 **기록만** 합니다 (화면에서 볼 수 있습니다). "
+            "MARKETSCAN_TELEGRAM_TOKEN·MARKETSCAN_TELEGRAM_CHAT_ID를 설정하세요."
+        )
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        out.warn(
+            f"{host}에 바인딩합니다. 이 화면은 인증이 없고 --commit 실행을 부를 수 "
+            f"있습니다 — 신뢰하는 네트워크에서만 쓰세요."
+        )
+    uvicorn.run(
+        "app.web.app:create_app" if not reload else "app.web.app:create_app",
+        host=host,
+        port=port,
+        reload=reload,
+        factory=True,
+        log_level="warning",
+    )
 
 
 # ============================================================================ ingest
@@ -436,50 +511,34 @@ async def _ingest(  # noqa: PLR0913 - CLI 플래그를 그대로 옮긴 것뿐�
     commit: bool,
     limit: int,
 ) -> None:
-    ctx = RunContext.create(
-        settings=spec.settings,
-        mode=ExecutionMode.NOTIFY,
+    outcome = await service.execute_ingest(
+        spec,
+        venue=venue,
+        lookback=lookback,
+        include_delisted=include_delisted,
+        force=force,
         now=_parse_now(out, now_raw),
-        pipeline_id=spec.pipeline_id,
         commit=commit,
     )
+    if not outcome.committed:
+        _ingest_plan_only(out, outcome, venue, limit)
+        return
 
-    try:
-        plan = await worker.plan_targets(
-            spec, ctx, lookback=lookback, include_delisted=include_delisted
-        )
-        plan = plan.filtered(venue)
-
-        if not commit:
-            await _ingest_plan_only(out, plan, ctx, venue, limit)
-            return
-
-        await db.init_db()
-        report = await worker.ingest(plan, ctx, db.get_sessionmaker(), force=force)
-        _report_ingest(out, plan, report, venue, limit)
-    finally:
-        await ctx.providers.close()
-        await db.dispose()
-
-    if report.failures and report.fetched == 0:
+    _report_ingest(out, outcome.plan, outcome.report, venue, limit)
+    if outcome.report.failures and outcome.report.fetched == 0:
         # 전부 실패한 것은 소스가 죽었다는 뜻이다. 자동 실행이 이 차이를 알아야 한다.
         raise typer.Exit(int(ExitCode.DATA))
 
 
-async def _ingest_plan_only(
-    out: Out, plan: Any, ctx: RunContext, venue: str | None, limit: int
+def _ingest_plan_only(
+    out: Out, outcome: service.IngestOutcome, venue: str | None, limit: int
 ) -> None:
     """dry-run — 무엇을 모을지와 지금 캐시에 뭐가 있는지만 보여 준다.
 
     커버리지를 함께 내는 이유는 "왜 아직 신호가 안 나오는가"의 답이 대개
     **캐시가 얕아서**이기 때문이다. 대상 목록만으로는 그것이 보이지 않는다.
     """
-    rows: list[dict[str, Any]] = []
-    if sqlite_path(db.database_url()) is not None and _database_exists():
-        rows = await worker.coverage_of(plan, ctx, db.get_sessionmaker())
-    else:
-        rows = [{**t.to_dict(), "bars": 0, "first": None, "last": None} for t in plan.targets]
-
+    plan, rows = outcome.plan, outcome.coverage
     for note in plan.notes:
         out.warn(note)
     out.warn("dry-run입니다. 소스를 호출하지도 캐시에 쓰지도 않았습니다 (--commit으로 실행).")
@@ -577,18 +636,22 @@ def describe(as_json: JsonOpt = False) -> None:
 
     payload = {
         "ok": True,
+        "config_dir": str(settings.resolve(".")),
         "strategies_dir": str(strategies_dir()),
         "strategies": strategies,
         "pipeline": pipeline_info,
         "nodes": [{"type": n["type"], "category": n["category"]} for n in catalog()],
         "timeframes": sorted(JUDGEMENT),
-        "database": settings.database_url,
+        # 설정값 그대로가 아니라 **실제로 열 경로**를 낸다. 상대 경로는 설정 디렉터리
+        # 기준이라, 적힌 값만 보여 주면 "그래서 어느 파일인가"에 답하지 못한다.
+        "database": db.database_url(),
         # 커버리지는 `ingest`가 대상별로 낸다 (3.9). 여기서 다시 집계하면 읽기 전용
         # 명령이 캐시 테이블을 훑게 되고, DB가 없을 때의 분기가 하나 더 생긴다.
         "cache_coverage": None,
         "last_run": last,
     }
     human = [
+        f"설정 디렉터리 {settings.resolve('.')}",
         f"전략 디렉터리 {strategies_dir()}",
         *(
             table(
@@ -918,7 +981,7 @@ async def _stats(out: Out, group_by: str, compare: str | None) -> dict[str, Any]
 # ========================================================================== strategy
 @strategy_app.command("list")
 def strategy_list(as_json: JsonOpt = False) -> None:
-    """`strategies/`의 전략과 소스 해시를 보여 줍니다."""
+    """설정 디렉터리(`~/.marketscan`)의 전략과 소스 해시를 보여 줍니다."""
     out = Out(as_json)
     sources = [s.to_dict() for s in discover()]
     out.emit(
