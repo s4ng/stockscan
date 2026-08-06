@@ -1,6 +1,19 @@
+<div align="center">
+
 # stockscan
 
 한국·미국 주식을 매일 훑어서 매수 후보를 뽑고 텔레그램으로 보내 주는 프로그램
+
+<!-- 스크린샷이 옛 이름(marketscan)이라 잠시 내려 둠. 새로 찍어서 갈아 끼울 것
+<p>
+  <img src="docs/images/alerts.jpg" alt="하트비트와 일일 신호 알림" width="30%">
+  <img src="docs/images/scorecard.jpg" alt="월간 성적표" width="30%">
+</p>
+-->
+
+</div>
+
+---
 
 ```
 📈 trend_breakout_55 — 신호 1건 [15:40]
@@ -31,6 +44,10 @@
 uv sync
 mkdir -p ~/.stockscan && cp sample/* ~/.stockscan/   # 설정과 전략은 한 벌
 uv run stockscan describe
+
+# 어디서든 `stockscan ...`으로 호출하려면
+uv tool install .                                    # stockscan 명령을 PATH에 올림
+stockscan describe
 ```
 
 설정 파일 `~/.stockscan/config.yml`
