@@ -397,33 +397,24 @@ def alert_test(as_json: JsonOpt = False) -> None:
 
 # =========================================================================== serve
 @cli.command()
-def serve(
-    host: Annotated[
-        str, typer.Option("--host", help="바인딩 주소. 기본은 이 컴퓨터에서만 열립니다.")
-    ] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
-    reload: Annotated[bool, typer.Option("--reload", help="개발용 자동 재시작")] = False,
-) -> None:
-    """상주 실행 — 웹 UI + 스케줄 + 알림 + 하트비트.
+def serve() -> None:
+    """상주 실행 — 스케줄 + 알림 + 하트비트.
 
     설정의 `scheduleTrigger`가 정한 시각에 `run --commit`을 부르고, **신호가
     0건이어도 하루 1회 하트비트를 보냅니다** — 없으면 "신호가 없는 것"과 "프로세스가
     죽은 것"이 구분되지 않습니다.
 
-    ⚠️ **알림이 나가는 유일한 명령입니다.** 화면에서 손으로 누른 실행은 보내지
-    않습니다 — 손으로 돌릴 때마다 채널로 나가면 알림을 믿지 않게 됩니다.
+    ⚠️ **알림이 나가는 유일한 명령입니다.** 사람이 손으로 부른 실행은 채널로
+    아무것도 내보내지 않습니다 — 손으로 돌릴 때마다 메시지가 나가면 알림 자체를
+    믿지 않게 됩니다.
 
-    ⚠️ **기본 바인딩이 `127.0.0.1`입니다.** 이 프로세스는 `~/.marketscan` 전체에
-    접근할 수 있고 화면에서 `--commit` 실행까지 부를 수 있으므로, 인증 없이
-    `0.0.0.0`에 여는 것은 그 권한을 네트워크에 그대로 내주는 것입니다.
+    화면은 없습니다. 결과를 보는 창구는 텔레그램과 CLI(`signals` · `stats` ·
+    `explain`)입니다 — 버튼이 하던 일은 전부 터미널에서 되는 일이었습니다.
     """
-    import uvicorn
-
-    from app.alerts import default_channel
     from app.schedule import Schedule
+    from app.serve import Scheduler
 
     out = Out(False)
-    out.progress(f"http://{host}:{port} 에서 UI를 엽니다. 종료는 Ctrl+C.")
 
     # 스케줄이 없거나 채널이 없으면 **시작할 때** 말한다. 하루가 지난 뒤
     # "왜 아무것도 안 왔지"가 되면 늦다 (미구현을 성공처럼 보이지 않게 한다).
@@ -433,33 +424,28 @@ def serve(
         schedule = None
         out.warn(f"설정을 읽지 못해 스케줄이 돌지 않습니다 — {exc}")
     if schedule is None:
-        out.warn("설정에 scheduleTrigger가 없어 **화면만** 뜹니다 (자동 실행 없음).")
-    else:
-        for line in schedule.describe():
-            out.progress(f"  스케줄 {line}")
-        if schedule.heartbeat is None:
-            out.warn(
-                "하트비트가 없습니다. 프로세스가 조용히 죽으면 '신호 0건'과 구분되지 "
-                "않습니다 — scheduleTrigger에 heartbeat를 넣으세요."
-            )
-    if default_channel().id == "log":
+        out.warn("설정에 scheduleTrigger가 없어 아무것도 돌지 않습니다.")
+        raise typer.Exit(int(ExitCode.VALIDATION))
+
+    for line in schedule.describe():
+        out.progress(f"스케줄 {line}")
+    if schedule.heartbeat is None:
         out.warn(
-            "텔레그램 토큰이 없어 알림을 **기록만** 합니다 (화면에서 볼 수 있습니다). "
+            "하트비트가 없습니다. 프로세스가 조용히 죽으면 '신호 0건'과 구분되지 "
+            "않습니다 — scheduleTrigger에 heartbeat를 넣으세요."
+        )
+    channel = default_channel()
+    if channel.id == "log":
+        out.warn(
+            "텔레그램 토큰이 없어 알림을 **기록만** 합니다 (아무 데도 안 갑니다). "
             "MARKETSCAN_TELEGRAM_TOKEN·MARKETSCAN_TELEGRAM_CHAT_ID를 설정하세요."
         )
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        out.warn(
-            f"{host}에 바인딩합니다. 이 화면은 인증이 없고 --commit 실행을 부를 수 "
-            f"있습니다 — 신뢰하는 네트워크에서만 쓰세요."
-        )
-    uvicorn.run(
-        "app.web.app:create_app" if not reload else "app.web.app:create_app",
-        host=host,
-        port=port,
-        reload=reload,
-        factory=True,
-        log_level="warning",
-    )
+
+    out.progress("상주 실행을 시작합니다. 종료는 Ctrl+C.")
+    try:
+        asyncio.run(Scheduler(channel).run_forever())
+    except KeyboardInterrupt:  # pragma: no cover - 사람이 끄는 경로
+        out.progress("종료합니다.")
 
 
 # ============================================================================ ingest

@@ -27,10 +27,6 @@ dependencies = [
     # 핀으로 붙잡아 둔 것이고, **우리가 쓰는 곳은 없다.** 위 pykrx 주석의 재검토
     # 조건이 충족되면 이 줄부터 지운다.
     "setuptools<81",
-    "fastapi>=0.141.1",
-    "uvicorn>=0.30",
-    "jinja2>=3.1.6",
-    "python-multipart>=0.0.32",
 ]
 
 [project.scripts]
@@ -38,7 +34,6 @@ marketscan = "app.cli.main:main"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
