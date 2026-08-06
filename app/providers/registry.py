@@ -171,6 +171,9 @@ DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
     "krx": ("pykrx", "fdr"),
     "nasdaq": ("yfinance", "fdr"),
     "nyse": ("yfinance", "fdr"),
+    # 벤치마크 지수는 FDR만 준다. 폴백이 없는 것은 대체 소스가 없어서다 (4.8).
+    "krx_index": ("fdr",),
+    "us_index": ("fdr",),
 }
 
 

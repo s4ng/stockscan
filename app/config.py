@@ -73,6 +73,17 @@ class ScheduleConfig(BaseModel):
         description="생존 신고 시각. ★ 없으면 '신호 0건'과 '프로세스 사망'이 구분되지 않습니다",
     )
 
+    scorecard_day: int | None = Field(
+        default=1,
+        ge=1,
+        le=28,
+        description=(
+            "★ 성적표를 보낼 날 (매월 N일). 이 프로젝트의 제품입니다 — "
+            "일일 알림은 원료고 이것이 결과입니다. null이면 보내지 않습니다"
+        ),
+    )
+    """⚠️ 28을 넘지 않는다. 29~31로 두면 그 달이 짧을 때 조용히 건너뛴다."""
+
     @field_validator("at")
     @classmethod
     def _unique(cls, value: list[time]) -> list[time]:

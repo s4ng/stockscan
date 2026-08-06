@@ -56,9 +56,16 @@
 **`ARCHITECTURE.md`가 설계의 단일 출처다.** 구조를 바꾸는 작업 전에 반드시 읽고,
 설계를 바꿨다면 그 문서도 함께 갱신한다.
 
-**현재 Phase 1·2·3 완료 — 진행 중인 것은 Phase 3.5(사후 검증)다.**
-목록은 `README.md`의 체크박스를 본다. **그때까지 out-of-sample 검증이 얇다**는 것을
-알고 쓴다.
+**현재 Phase 1·2·3·3.5 완료 — 다음은 관찰이다.** `serve`를 띄워 두고 신호가 쌓이기를
+기다린 뒤 매월 오는 성적표를 읽는다. 목록은 `README.md`의 체크박스를 본다.
+
+★ **채점 경로가 붙었다** — `marketscan evaluate`(사후 수익률) · `marketscan scorecard`
+(성적표). 성적표는 `serve`가 매월 `scorecard_day`에 텔레그램으로 보내고, 일일 알림에도
+"이 전략 최근 N건 성적" 한 줄이 붙는다.
+
+⚠️ **숫자를 혼자 두지 않는다** — 승률 옆에는 **기저율**(같은 세션 전 종목의 승률),
+수익률 옆에는 **벤치마크 대비**. 없으면 상승장에서 아무거나 찍어도 나오는 승률을
+전략의 공으로 돌리게 된다. 표본이 5건보다 적으면 **숫자를 내지 않는다.**
 
 ### 2026-08-06에 걷어낸 것 — 되살리지 않는다
 
@@ -118,7 +125,10 @@ uv run marketscan ingest            # 수집 계획 + 캐시 커버리지 (기�
 uv run marketscan ingest --commit   # 실제 수집 → ohlcv_cache
 uv run marketscan backtest krx:005930 --start 20251201  # 날짜별 리플레이 + 차트
 uv run marketscan run -c other.yml   # 다른 설정 (`-p`에서 `-c`로 바뀌었다)
-uv run marketscan serve             # 스케줄 + 알림 (상주, 화면 없음)
+uv run marketscan evaluate          # 사후 수익률 채우기 (외부 호출 없음)
+uv run marketscan scorecard         # ★ 성적표 — 이 프로젝트의 제품
+uv run marketscan scorecard --send  # 텔레그램으로도 보낸다
+uv run marketscan serve             # 스케줄 + 알림 + 성적표 (상주, 화면 없음)
 uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 지금 본다)
 ```
 
@@ -209,7 +219,7 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
     `rank`·`percentile`·`universe_size`도 함께 거짓말이 된다.
     유동성 컷을 venue별로 나눈 것과 같은 논리다.
     **그룹 키는 `venue`가 아니라 시장이다** — `nasdaq`과 `nyse`는 나눌 이유가 없다.
-18. **한 번이라도 신호가 난 종목은 수집을 멈추지 않는다** (§3.9). 유니버스에서 밀렸다고
+18. **한 번이라도 신호가 난 종목은 수집을 멈추지 않는다** (§3.9). ✅ 구현됨 유니버스에서 밀렸다고
     봉 수집이 끊기면 **사후 수익률이 결측되고 `backtest` 차트가 그 시점에 멈추는데,
     하필 밀린 종목이 대개 내린 종목이라** 성적표와 화면이 함께 낙관 편향된다.
     `ingest` 대상에 `signals`의 종목을 더한다.

@@ -44,6 +44,9 @@ class Schedule:
     heartbeat: time | None = None
     """하루 1회 생존 신고 시각. **없으면 죽은 것과 신호 0건이 구분되지 않는다** (8장)."""
 
+    scorecard_day: int | None = None
+    """★ 성적표를 보낼 날 (매월 N일). 하트비트 시각에 함께 나간다."""
+
     @property
     def tz(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
@@ -72,6 +75,8 @@ class Schedule:
         rows = [e.label() for e in self.entries]
         if self.heartbeat:
             rows.append(f"{self.heartbeat.strftime('%H:%M')} [하트비트] 신호 0건이어도 보냅니다")
+        if self.scorecard_day:
+            rows.append(f"매월 {self.scorecard_day}일 [성적표] 사후 수익률·승률·오버라이드")
         return rows
 
     @classmethod
@@ -83,6 +88,7 @@ class Schedule:
             entries=tuple(ScheduleEntry(at=t) for t in config.schedule.at),
             timezone=config.timezone,
             heartbeat=config.schedule.heartbeat,
+            scorecard_day=config.schedule.scorecard_day,
         )
 
 

@@ -29,13 +29,14 @@ SYNTHETIC_LISTING: dict[str, tuple[str, ...]] = {
     "krx": ("005930", "000660", "035720", "051910", "005380", "068270", "207940"),
     "nasdaq": ("AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"),
     "nyse": ("KO", "JPM", "XOM", "PG", "JNJ", "WMT", "V"),
+    # 벤치마크 지수는 목록 조회 대상이 아니다(수집만 한다). 봉은 fetch_ohlcv가 준다.
 }
 
 
 class SyntheticProvider(MarketDataProvider):
     id = "synthetic"
     display_name = "Synthetic (개발용 더미 시세)"
-    venues = ("krx", "nasdaq", "nyse")
+    venues = ("krx", "nasdaq", "nyse", "krx_index", "us_index")
     credential_schema = None
     capabilities = ProviderCapabilities(
         timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"),

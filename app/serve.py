@@ -163,6 +163,10 @@ class Scheduler:
 
         if self.heartbeat_due(schedule, now):
             await self._heartbeat(now)
+            # ★ 성적표는 하트비트 시각에 함께 나간다 — 발화 시각을 하나 더 두면
+            #   "그날 몇 시에 뭐가 오는지"를 사람이 또 외워야 한다.
+            if _scorecard_due(schedule, now):
+                await self._send_scorecard(now)
 
         # ★ 발화와 무관하게 매 tick 걷는다. 사용자가 버튼을 누르는 시각은 슬롯과
         #   아무 상관이 없고, 안 걷으면 텔레그램이 24시간 뒤 그 응답을 버린다.
@@ -235,9 +239,42 @@ class Scheduler:
         )
         self.state.record(fire)
         if outcome.written:
+            # ★ 알림이 자기 성적을 달고 나간다 — 받는 순간 "이걸 얼마나 믿어야
+            #   하나"가 같이 와야 한다. 근거 없는 명령만 오면 알림을 보지 않게 된다.
+            record = await self._recent_record(outcome)
             await self._send(
-                _signal_message(entry, outcome), buttons=ack_buttons(outcome.signal_ids)
+                _signal_message(entry, outcome, record),
+                buttons=ack_buttons(outcome.signal_ids),
             )
+
+    async def _recent_record(self, outcome: service.RunOutcome) -> str:
+        """이 전략의 최근 성적 한 줄. 표본이 적으면 **빈 문자열**(지어내지 않는다)."""
+        from app import scorecard as sc
+
+        strategy = (outcome.signals[0].get("strategy_id") if outcome.signals else None) or ""
+        if not strategy:
+            return ""
+        try:
+            async with db.session_scope() as session:
+                return sc.render_inline(await sc.signal_count(session, strategy))
+        except Exception:  # noqa: BLE001 - 성적을 못 붙여도 알림은 나가야 한다
+            return ""
+
+    async def _send_scorecard(self, now: datetime) -> None:
+        """★ **이 메시지가 제품이다** (4.8).
+
+        일일 알림은 원료다 — 모르는 종목의 순위를 받아도 할 수 있는 다음 행동이
+        없다. 한 달에 한 번 오는 이것이 "내가 정한 규칙이 실제로 어땠는가"에 답한다.
+        """
+        from app import scorecard as sc
+
+        try:
+            async with db.session_scope() as session:
+                card = await sc.build(session, now=now)
+        except Exception as exc:  # noqa: BLE001 - 집계 실패로 하루치를 버리지 않는다
+            self.state.error = f"성적표 생성 실패 — {exc}"
+            return
+        await self._send(sc.render(card))
 
     async def _fill_forward_returns(self) -> None:
         """신호의 사후 수익률을 채운다 (4.8). **실패해도 실행을 실패로 만들지 않는다.**
@@ -300,11 +337,23 @@ class Scheduler:
             await asyncio.sleep(poll_seconds)
 
 
+def _scorecard_due(schedule: Schedule, now: datetime) -> bool:
+    """오늘이 성적표 보내는 날인가.
+
+    ⚠️ 하트비트와 함께 나가므로 **하루에 한 번만** 판정된다 — 하트비트가 이미
+    "직전 판단과 지금 사이를 지났는가"로 걸러져 있어 중복 발송이 없다.
+    """
+    day = schedule.scorecard_day
+    return bool(day) and now.astimezone(schedule.tz).day == day
+
+
 def _tz(state: SchedulerState) -> Any:
     return state.schedule.tz if state.schedule else UTC
 
 
-def _signal_message(entry: ScheduleEntry, outcome: service.RunOutcome) -> str:
+def _signal_message(
+    entry: ScheduleEntry, outcome: service.RunOutcome, record: str = ""
+) -> str:
     """알림 본문.
 
     ★ **종목명과 순위만으로는 행동으로 이어지지 않는다.** 모르는 종목의 등수를 받으면

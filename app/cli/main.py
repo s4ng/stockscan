@@ -391,6 +391,81 @@ def alert_test(as_json: JsonOpt = False) -> None:
     )
 
 
+# ======================================================================== scorecard
+@cli.command()
+def scorecard(
+    days: Annotated[int, typer.Option("--days", min=1, max=3650)] = 30,
+    strategy: Annotated[str | None, typer.Option("--strategy")] = None,
+    send: Annotated[
+        bool, typer.Option("--send", help="알림 채널로도 보냅니다 (기본은 화면만)")
+    ] = False,
+    as_json: JsonOpt = False,
+) -> None:
+    """★ **성적표 — 이 프로젝트의 제품입니다** (§4.8).
+
+    "내가 정한 규칙이 실제로 어땠는가"에 답합니다. 숫자를 혼자 두지 않습니다 —
+    승률 옆에는 **기저율**(같은 기간 전 종목의 승률), 수익률 옆에는 **벤치마크 대비**.
+    그것이 없으면 상승장에서 아무거나 찍어도 나오는 승률을 전략의 공으로 돌리게 됩니다.
+
+    ★ **가장 값진 줄은 "산 것 vs 무시한 것"입니다.** 무시한 신호가 더 좋았다면
+    재량이 손해라는 뜻이고, 개인 투자자가 이 숫자를 보는 일은 거의 없습니다.
+
+    `--send`를 붙이면 텔레그램으로도 갑니다. `serve`는 한 달에 한 번 자동으로 보냅니다.
+    """
+    out = Out(as_json)
+    if not _database_exists():
+        out.emit(
+            {"ok": True, "signals": 0},
+            ["신호가 없습니다 (`run --commit`으로 먼저 기록하세요)."],
+        )
+        return
+
+    card = asyncio.run(_scorecard(days, strategy))
+    text = _render_scorecard(card)
+    if send:
+        _send_now(out, text)
+    out.emit({"ok": True, **card}, text.split("\n"))
+
+
+async def _scorecard(days: int, strategy: str | None) -> dict[str, Any]:
+    from app import scorecard as sc
+
+    await db.init_db()
+    try:
+        async with db.session_scope() as session:
+            card = await sc.build(session, now=datetime.now(UTC), days=days, strategy=strategy)
+        return card.to_dict()
+    finally:
+        await db.dispose()
+
+
+def _render_scorecard(payload: dict[str, Any]) -> str:
+    from app import scorecard as sc
+
+    card = sc.Scorecard(
+        strategy=payload["strategy"],
+        days=payload["days"],
+        signals=payload["signals"],
+        evaluated=payload["evaluated"],
+        horizons=[sc.Horizon(**h) for h in payload["horizons"]],
+        override=sc.Override(**payload["override"]),
+        notes=payload["notes"],
+    )
+    return sc.render(card)
+
+
+def _send_now(out: Out, text: str) -> None:
+    """⚠️ 예외적으로 바깥으로 나갑니다 — 사람이 `--send`로 **명시적으로** 부른 것이고,
+    신호가 아니라 집계입니다 (12.2의 "알림은 serve만"이 겨누는 것은 신호 알림입니다)."""
+    channel = default_channel()
+    if channel.id == "log":
+        out.warn("보낼 채널이 없어 화면에만 냅니다 (텔레그램 토큰 미설정).")
+        return
+    delivery = asyncio.run(channel.send(text))
+    if not delivery.ok:
+        out.warn(f"보내지 못했습니다 — {delivery.error}")
+
+
 # ========================================================================= evaluate
 @cli.command()
 def evaluate(
@@ -977,9 +1052,7 @@ def stats(
 ) -> None:
     """신호 이력 집계. 부작용 없음.
 
-    ⚠️ **여기서 나오는 것은 건수와 분산뿐입니다.** forward return · hit rate · IC는
-    Forward Return Evaluator가 사후 수익률을 채운 뒤에야 계산할 수 있고, 그건
-    Phase 3입니다. 없는 숫자를 만들어 내지 않습니다 (4.8).
+    사후 성적은 `marketscan scorecard`가 냅니다 — 이쪽은 건수와 분산입니다.
     """
     out = Out(as_json)
     payload = asyncio.run(_stats(out, group_by, compare))
@@ -997,7 +1070,7 @@ def stats(
         human += [
             "",
             f"오버라이드 — 실행 {a['acted']} / 무시 {a['ignored']} / 미응답 {a['unanswered']}",
-            "※ 무시한 신호의 사후 성과는 Forward Return Evaluator(Phase 3) 이후에 나옵니다.",
+            "※ 무시한 신호의 사후 성과는 `marketscan scorecard`가 냅니다.",
         ]
     out.emit(payload, human)
 

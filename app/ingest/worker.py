@@ -28,6 +28,7 @@ import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app import benchmark
 from app.config import TIMEFRAME, AppConfig, lookback_for
 from app.engine.context import RunContext
 from app.market.calendar import CalendarRangeError
@@ -155,6 +156,7 @@ async def plan_targets(
         _add(seen, IngestTarget(instrument, TIMEFRAME, depth, end, "universe", AUTO))
 
     await _add_signalled(seen, ctx, plan, depth)
+    _add_benchmarks(seen, ctx, plan, depth)
 
     if include_delisted:
         await _add_delisted(seen, ctx, plan, lookback or 500, delisted_since)
@@ -212,6 +214,27 @@ async def _add_signalled(
             f"유니버스에서 밀렸지만 과거에 신호가 났던 {added}종목을 수집 대상에 "
             f"더했습니다 (규칙 18) — 봉이 끊기면 그 신호의 사후 수익률이 결측됩니다."
         )
+
+
+def _add_benchmarks(
+    seen: dict[tuple[str, str], IngestTarget], ctx: RunContext, plan: Plan, depth: int
+) -> None:
+    """벤치마크 지수를 수집 대상에 더한다 (4.8).
+
+    ★ **이것이 없으면 hit rate가 거짓말을 한다** — 상승장에서는 아무거나 찍어도
+    승률이 60%를 넘는다. 그 숫자를 전략의 공으로 돌리지 않으려면 같은 구간의
+    시장 수익률이 필요하다.
+
+    지수는 랭킹 풀에 들어가지 않으므로(venue의 market이 `benchmark`) 유니버스와
+    섞일 걱정이 없다.
+    """
+    for ref in benchmark.all_refs():
+        if (ref.venue, ref.symbol) in seen:
+            continue
+        end = _last_closed(ref, TIMEFRAME, ctx, plan)
+        if end is None:
+            continue
+        _add(seen, IngestTarget(ref, TIMEFRAME, depth, end, "benchmark", AUTO))
 
 
 def _database_exists(url: str) -> bool:

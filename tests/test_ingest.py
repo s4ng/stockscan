@@ -25,11 +25,16 @@ from app.ingest import worker
 from app.market.instrument import InstrumentRef
 from app.providers.registry import ProviderRegistry
 from app.providers.synthetic import SyntheticProvider
-from app.storage import history, ohlcv_cache
+from app.storage import ohlcv_cache
 from app.storage.models import Base, IngestionJobRow, SignalRow
 from tests.conftest import make_config
 
 NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+
+
+def tradable(plan):
+    """벤치마크 지수를 뺀 수집 대상. 지수는 판정 대상이 아니라 비교 대상이다 (4.8)."""
+    return [t for t in plan.targets if t.origin != "benchmark"]
 
 
 #: synthetic 소스가 주는 목록의 앞부분. `SYNTHETIC_LISTING`과 짝을 이룬다.
@@ -67,8 +72,8 @@ async def maker():
 async def test_targets_come_from_the_universe():
     plan = await worker.plan_targets(spec({"nasdaq": 2, "krx": 2}), context())
 
-    assert {t.instrument.key for t in plan.targets} == set(NASDAQ) | set(KRX)
-    assert all(t.origin == "universe" for t in plan.targets)
+    assert {t.instrument.key for t in tradable(plan)} == set(NASDAQ) | set(KRX)
+    assert all(t.origin == "universe" for t in tradable(plan))
 
 
 async def test_depth_is_derived_from_the_strategy():
@@ -83,6 +88,15 @@ async def test_depth_is_derived_from_the_strategy():
     expected = lookback_for(load_strategy("demo_momentum").strategy.startup_candles)
 
     assert all(t.lookback == expected for t in plan.targets)
+
+
+async def test_benchmarks_are_always_collected():
+    """★ 벤치마크가 없으면 hit rate가 거짓말을 한다 — 상승장에선 아무거나 찍어도
+    승률이 60%를 넘는다 (4.8)."""
+    plan = await worker.plan_targets(spec(), context())
+
+    benchmarks = {t.instrument.key for t in plan.targets if t.origin == "benchmark"}
+    assert benchmarks == {"krx_index:KS11", "us_index:US500"}
 
 
 async def test_end_is_the_last_closed_bar_of_each_market():
@@ -109,8 +123,8 @@ async def test_ingest_fills_the_cache(maker):
     report = await worker.ingest(plan, ctx, maker)
 
     depth = plan.targets[0].lookback
-    assert report.fetched == 1
-    assert report.inserted == depth
+    assert report.fetched == 3  # 종목 1 + 벤치마크 2
+    assert report.inserted == depth * 3
     async with maker() as session:
         cov = await ohlcv_cache.coverage(
             session, InstrumentRef.parse("nasdaq:AAPL"), "1d", adjusted=True
@@ -126,10 +140,10 @@ async def test_second_run_does_not_touch_the_source(maker):
     await worker.ingest(plan, ctx, maker)
 
     again = await worker.ingest(plan, ctx, maker)
-    assert (again.fetched, again.skipped_fresh) == (0, 1)
+    assert (again.fetched, again.skipped_fresh) == (0, 3)
 
     forced = await worker.ingest(plan, ctx, maker, force=True)
-    assert forced.fetched == 1
+    assert forced.fetched == 3
 
 
 async def test_one_failure_does_not_stop_the_rest(maker):
@@ -145,8 +159,8 @@ async def test_one_failure_does_not_stop_the_rest(maker):
     ctx.providers.fetch_ohlcv = flaky  # type: ignore[method-assign]
     report = await worker.ingest(plan, ctx, maker)
 
-    assert report.fetched == 1
-    assert [k for k, _ in report.failures] == ["nasdaq:AAPL"]
+    assert report.fetched == 3  # 나머지 1종목 + 벤치마크 2
+    assert "nasdaq:AAPL" in [k for k, _ in report.failures]
     async with maker() as session:
         failed = await session.get(IngestionJobRow, ("nasdaq", "AAPL", "1d", True))
     assert failed.failure_count == 1
@@ -239,7 +253,7 @@ async def test_a_signalled_instrument_still_in_the_universe_is_not_duplicated(
     plan = await worker.plan_targets(spec({"nasdaq": 2}), context())
 
     assert [t.instrument.key for t in plan.targets].count("nasdaq:AAPL") == 1
-    assert all(t.origin == "universe" for t in plan.targets)
+    assert all(t.origin == "universe" for t in tradable(plan))
 
 
 def _scope(maker):
@@ -292,6 +306,6 @@ async def test_a_live_target_is_not_overwritten_by_the_delisted_list(
     monkeypatch.setattr(ctx.providers, "get", lambda pid: FakeFdr())
     plan = await worker.plan_targets(spec({"krx": 1}), ctx, include_delisted=True)
 
-    assert len(plan.targets) == 1
-    assert plan.targets[0].origin == "universe"
+    assert len(tradable(plan)) == 1
+    assert tradable(plan)[0].origin == "universe"
     assert plan.targets[0].end == datetime(2026, 3, 10, 6, 30, tzinfo=UTC)

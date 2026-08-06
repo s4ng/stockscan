@@ -464,27 +464,28 @@ def test_ingest_without_commit_writes_nothing(workspace: Path):
     """계획만 보여 준다. 소스도 캐시도 건드리지 않는다 (규칙 11)."""
     body = payload(invoke("ingest", "--now", NOW, "--json"))
     assert body["committed"] is False
-    assert body["planned"] == 6
-    assert body["uncached"] == 6  # 아직 아무것도 안 쌓였다
+    assert body["planned"] == 8  # 종목 6 + 벤치마크 2
+    assert body["uncached"] == 8  # 아직 아무것도 안 쌓였다
     assert not (workspace / "test.db").exists()
 
 
 def test_ingest_commit_fills_the_cache(workspace: Path):
     body = payload(invoke("ingest", "--now", NOW, "--commit", "--json"))
     assert body["committed"] is True
-    assert body["fetched"] == 6
+    assert body["fetched"] == 8
     assert body["inserted"] > 0
     assert body["failures"] == []
     assert (workspace / "test.db").exists()
 
     # 두 번째 실행은 같은 봉을 다시 받지 않는다 — 무료 소스를 하루에 한 번만 밟는다.
     again = payload(invoke("ingest", "--now", NOW, "--commit", "--json"))
-    assert again["skipped_fresh"] == 6
+    assert again["skipped_fresh"] == 8
     assert again["fetched"] == 0
 
 
 def test_ingest_venue_filter(workspace: Path):
     body = payload(invoke("ingest", "--now", NOW, "--venue", "nasdaq", "--json"))
+    # --venue는 벤치마크도 함께 거른다 — nasdaq만 남아야 한다
     assert body["planned"] == 6
     assert all(t["instrument"].startswith("nasdaq:") for t in body["targets"])
 

@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from app.market.calendar import ExchangeSessionCalendar
-from app.market.instrument import InstrumentRef
+from app.market.instrument import VENUES, InstrumentRef
 from app.market.timeframe import normalize
 from app.providers.base import (
     HealthStatus,
@@ -60,7 +60,7 @@ _MIN_PADDING_DAYS = 14
 class FdrProvider(MarketDataProvider):
     id = "fdr"
     display_name = "FinanceDataReader (마스터·폐지목록·폴백 일봉)"
-    venues = ("krx", "nasdaq", "nyse")
+    venues = ("krx", "nasdaq", "nyse", "krx_index", "us_index")
     credential_schema = None
     capabilities = ProviderCapabilities(
         timeframes=("1d",),
@@ -77,7 +77,12 @@ class FdrProvider(MarketDataProvider):
         }
 
     def _calendar_for(self, venue: str) -> ExchangeSessionCalendar:
-        return self._calendars["krx"] if venue == "krx" else self._calendars["us"]
+        """venue가 아니라 **캘린더 id**로 고른다.
+
+        예전에는 `venue == "krx"`로 갈랐는데, 벤치마크 venue(`krx_index`)가 붙으면서
+        그 방식이 KOSPI를 미국 캘린더로 자르게 됐다 — 봉의 마감 시각이 통째로 틀어진다.
+        """
+        return self._calendars["krx" if VENUES[venue].calendar_id == "krx" else "us"]
 
     # --------------------------------------------------------------------- 시세
     async def fetch_ohlcv(

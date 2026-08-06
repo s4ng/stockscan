@@ -228,6 +228,17 @@ class SignalRow(Base):
     같은 소스에서 나와야 수정주가 정책이 바뀌어도 비율이 어긋나지 않는다 (3.8).
     """
 
+    bench_1: Mapped[float | None] = mapped_column(Float, default=None)
+    bench_5: Mapped[float | None] = mapped_column(Float, default=None)
+    bench_20: Mapped[float | None] = mapped_column(Float, default=None)
+    """같은 구간 **그 시장 벤치마크**의 수익률 (KOSPI / S&P500).
+
+    ★ **이것이 없으면 hit rate가 거짓말을 한다** — 상승장에서는 아무거나 찍어도
+    승률이 60%를 넘는다. 빼고 봐야 "시장이 좋았던 것"과 "전략이 좋았던 것"이 갈린다.
+
+    ⚠️ 신호와 **같은 봉 수**로 잰다. 날짜로 맞추면 휴장일이 다른 시장에서 어긋난다.
+    """
+
     fwd_evaluated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     """마지막으로 평가기가 훑은 시각. 아직 안 본 신호와 "보았지만 봉이 모자란"
     신호를 구분한다 — 구분하지 못하면 매번 전량을 다시 훑게 된다."""

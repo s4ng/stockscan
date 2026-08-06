@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import benchmark
 from app.market.instrument import InstrumentRef, UnknownVenueError
 from app.storage.models import OhlcvCacheRow, SignalRow
 
@@ -56,12 +57,16 @@ class EvalReport:
     missing_bars: list[str] = field(default_factory=list)
     """★ 봉이 끊겨 채우지 못한 종목. **조용히 빼지 않고 드러낸다** (규칙 18)."""
 
+    missing_benchmark: set[str] = field(default_factory=set)
+    """벤치마크 봉이 없어 초과수익을 못 낸 시장. `ingest --commit`이 지수를 모은다."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "scanned": self.scanned,
             "filled": {f"fwd_{n}": c for n, c in sorted(self.filled.items())},
             "pending": self.pending,
             "missing_bars": self.missing_bars,
+            "missing_benchmark": sorted(self.missing_benchmark),
         }
 
 
@@ -99,6 +104,9 @@ async def evaluate(session: AsyncSession, *, limit: int = BATCH) -> EvalReport:
             setattr(row, column, forward[horizon - 1] / base - 1)
             report.filled[horizon] = report.filled.get(horizon, 0) + 1
 
+        # 같은 구간의 시장 수익률. 없으면 비워 둔다 — 지어내지 않는다.
+        await _fill_benchmark(session, row, report)
+
         row.fwd_evaluated_at = datetime.now(UTC)
         # **아직 비어 있는 지평선이 하나라도 있으면 기다리는 중이다.** 일부만 채운
         # 신호도 여기 들어간다 — "다 됐다"와 "1봉만 됐다"를 같게 세면 성적표가
@@ -109,6 +117,33 @@ async def evaluate(session: AsyncSession, *, limit: int = BATCH) -> EvalReport:
     await session.commit()
     report.missing_bars = sorted(missing)
     return report
+
+
+async def _fill_benchmark(session: AsyncSession, row: SignalRow, report: EvalReport) -> None:
+    """같은 구간 벤치마크의 수익률을 채운다 (4.8).
+
+    ⚠️ **신호와 같은 봉 수로 잰다.** 날짜로 맞추면 휴장일이 다른 시장에서 어긋나고,
+    그 어긋남이 초과수익에 그대로 실린다.
+
+    벤치마크 봉이 없으면 **비워 둔다.** `ingest --commit`이 지수를 모으면 다음
+    평가에서 채워진다 — 없는 숫자를 0으로 지어내면 초과수익이 곧 원수익이 된다.
+    """
+    market = benchmark.market_of(row.venue)
+    ref = benchmark.for_market(market) if market else None
+    if ref is None:
+        return
+
+    base = await _close_at(session, ref, row.timeframe, row.as_of)
+    if base is None or base <= 0:
+        report.missing_benchmark.add(market or "?")
+        return
+
+    forward = await _closes_after(session, ref, row.timeframe, row.as_of)
+    for horizon in HORIZONS:
+        column = f"bench_{horizon}"
+        if getattr(row, column) is not None or len(forward) < horizon:
+            continue
+        setattr(row, column, forward[horizon - 1] / base - 1)
 
 
 # --------------------------------------------------------------------------- 내부

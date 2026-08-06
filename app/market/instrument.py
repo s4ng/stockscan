@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+#: 벤치마크 지수가 속하는 "시장". 거래 대상이 아니므로 랭킹 풀이 아니다 —
+#: 이름을 따로 두어 `venues_of("krx")`에 섞이지 않게 한다 (규칙 17).
+BENCHMARK = "benchmark"
+
 
 @dataclass(frozen=True)
 class VenueSpec:
@@ -41,6 +45,11 @@ VENUES: dict[str, VenueSpec] = {
     "krx": VenueSpec("krx", "krx", market="krx", quote_currency="KRW"),
     "nasdaq": VenueSpec("nasdaq", "us_equity", market="us", quote_currency="USD"),
     "nyse": VenueSpec("nyse", "us_equity", market="us", quote_currency="USD"),
+    # ★ 벤치마크 지수 (4.8). **market이 `benchmark`인 것이 핵심이다** — 랭킹 풀에
+    #   섞이면 지수가 종목과 함께 줄 세워진다. `venues_of("krx")`가 이걸 돌려주지
+    #   않으므로 파이프라인에는 절대 들어가지 않는다.
+    "krx_index": VenueSpec("krx_index", "krx", market=BENCHMARK, quote_currency="KRW"),
+    "us_index": VenueSpec("us_index", "us_equity", market=BENCHMARK, quote_currency="USD"),
 }
 
 
@@ -50,8 +59,20 @@ def venues_of(market: str) -> tuple[str, ...]:
 
 
 def markets() -> tuple[str, ...]:
-    """알려진 시장 목록. 표를 두 곳에 두지 않으려고 VENUES에서 유도한다."""
-    return tuple(dict.fromkeys(spec.market for spec in VENUES.values()))
+    """훑을 수 있는 시장 목록. 표를 두 곳에 두지 않으려고 VENUES에서 유도한다.
+
+    **벤치마크는 뺀다** — 지수는 판정 대상이 아니라 비교 대상이다.
+    """
+    return tuple(
+        dict.fromkeys(
+            spec.market for spec in VENUES.values() if spec.market != BENCHMARK
+        )
+    )
+
+
+def is_benchmark(venue: str) -> bool:
+    spec = VENUES.get(venue)
+    return spec is not None and spec.market == BENCHMARK
 
 
 class UnknownVenueError(ValueError):
