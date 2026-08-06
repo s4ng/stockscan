@@ -30,7 +30,7 @@ from app.engine.types import Bundle, Item
 from app.strategies import Strategy, top_pct
 
 #: 거래일 기준 근사치 — 12개월 ≈ 252거래일, 1개월 ≈ 21거래일.
-#: 코인은 365일 거래되지만 **팩터의 표준 정의를 시장에 맞춰 바꾸지 않는다.**
+#: **팩터의 표준 정의를 시장에 맞춰 바꾸지 않는다.**
 #: 정의를 흔들기 시작하면 그 순간부터 파라미터 탐색이 된다 (4.8).
 MONTHS_12 = 252
 MONTHS_1 = 21

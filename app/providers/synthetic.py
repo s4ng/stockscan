@@ -21,7 +21,15 @@ from app.providers.base import (
     HealthStatus,
     MarketDataProvider,
     ProviderCapabilities,
+    UniverseEntry,
 )
+
+#: venue별 가짜 종목 목록. **결정적이어야 한다** — 테스트가 유니버스 크기에 기댄다.
+SYNTHETIC_LISTING: dict[str, tuple[str, ...]] = {
+    "krx": ("005930", "000660", "035720", "051910", "005380", "068270", "207940"),
+    "nasdaq": ("AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"),
+    "nyse": ("KO", "JPM", "XOM", "PG", "JNJ", "WMT", "V"),
+}
 
 
 class SyntheticProvider(MarketDataProvider):
@@ -40,6 +48,21 @@ class SyntheticProvider(MarketDataProvider):
 
     def __init__(self, volatility: float = 0.015) -> None:
         self.volatility = volatility
+
+    async def list_instruments(self, venue: str) -> list[UniverseEntry]:
+        """가짜 종목 목록. 거래대금은 **목록 순서대로 줄어드는 결정적 값**이다.
+
+        순서를 값에 실어 두면 "거래대금 상위 N"이 실제로 정렬을 하는지 테스트가
+        확인할 수 있다. 값 자체에는 뜻이 없다 — 합성 시세이므로.
+        """
+        symbols = SYNTHETIC_LISTING.get(venue, ())
+        return [
+            UniverseEntry(
+                InstrumentRef.parse(f"{venue}:{symbol}"),
+                float((len(symbols) - index) * 1_000_000),
+            )
+            for index, symbol in enumerate(symbols)
+        ]
 
     async def fetch_ohlcv(
         self,

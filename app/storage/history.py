@@ -14,9 +14,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.engine.runner import RunResult
 from app.engine.signals import SignalDraft
-from app.schemas.pipeline import PipelineSpec
+from app.pipeline import RunResult
 from app.storage.models import (
     NodeRunRow,
     RunRow,
@@ -112,7 +111,8 @@ async def start_run(
     session: AsyncSession,
     *,
     run_id: str,
-    spec: PipelineSpec,
+    pipeline_id: str,
+    version: int,
     mode: str,
     as_of: datetime,
 ) -> None:
@@ -124,8 +124,8 @@ async def start_run(
     session.add(
         RunRow(
             id=run_id,
-            pipeline_id=spec.pipeline_id,
-            pipeline_version=spec.version,
+            pipeline_id=pipeline_id,
+            pipeline_version=version,
             mode=mode,
             as_of=as_of,
             status="running",
@@ -135,7 +135,12 @@ async def start_run(
 
 
 async def finish_run(session: AsyncSession, result: RunResult) -> None:
-    """실행 결과와 노드별 스냅샷을 기록한다 (4.9)."""
+    """실행 결과와 단계별 스냅샷을 기록한다 (4.9).
+
+    ⚠️ 테이블 이름은 `node_runs` 그대로다. DAG를 걷어냈어도 `explain`이 이 스냅샷을
+    읽어 "왜 이 신호가 났는가"를 돌려주므로, 형식을 바꾸면 과거 실행을 되짚을 수
+    없게 된다 — 그건 이 프로젝트가 자신감 기계가 되지 않게 막는 장치다.
+    """
     row = await session.get(RunRow, result.run_id)
     if row is None:  # pragma: no cover - start_run이 항상 선행한다
         return
@@ -245,8 +250,8 @@ async def signal_counts(
     """신호 건수 집계.
 
     ⚠️ 여기서 내보내는 것은 **건수와 분산뿐이다.** forward return·hit rate·IC는
-    Forward Return Evaluator가 사후 수익률을 채운 뒤에야 계산할 수 있고, 그건
-    Phase 3이다. 없는 숫자를 만들어 내지 않는다 (4.8).
+    Forward Return Evaluator가 사후 수익률을 채운 뒤에야 계산할 수 있다 (Phase 3.5).
+    없는 숫자를 만들어 내지 않는다 (4.8).
     """
     column = {
         "strategy": SignalRow.strategy_id,

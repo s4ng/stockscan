@@ -21,7 +21,7 @@ import pytest
 from app.engine.context import RunContext
 from app.engine.types import Bundle
 from app.market.instrument import InstrumentRef
-from app.nodes.inputs.market_data import MarketDataNode
+from app.pipeline import fetch_bars
 from app.providers.fdr_source import FdrProvider
 from app.providers.pykrx_source import PykrxProvider
 from app.providers.registry import (
@@ -129,10 +129,7 @@ async def test_all_sources_dead_raises_with_every_reason(monkeypatch: pytest.Mon
 async def test_fallback_is_visible_in_item_meta_and_logs(monkeypatch: pytest.MonkeyPatch):
     """★ 사후에 "어느 소스로 대체됐나"를 되짚는 유일한 단서다 (3.4)."""
     ctx = RunContext.create(now=NOW, providers=routed_registry(monkeypatch, pykrx_dies=True))
-    params = MarketDataNode.ParamsModel(instruments=["krx:005930"], lookback=3)
-
-    output = await MarketDataNode().run({}, params, ctx.bind("data"))
-    bundle: Bundle = output["main"]
+    bundle: Bundle = await fetch_bars(["krx:005930"], {}, 3, ctx.bind("data"))
 
     item = bundle.items[0]
     assert item.meta["source"] == "fdr"
@@ -147,9 +144,7 @@ async def test_fallback_records_the_source_that_actually_answered(
 ):
     """`adjusted`는 응답한 소스가 정한다 — 캐시 키에 들어가므로 (규칙 8)."""
     ctx = RunContext.create(now=NOW, providers=routed_registry(monkeypatch, pykrx_dies=True))
-    params = MarketDataNode.ParamsModel(instruments=["krx:005930"], lookback=3)
-
-    output = await MarketDataNode().run({}, params, ctx.bind("data"))
+    bundle = await fetch_bars(["krx:005930"], {}, 3, ctx.bind("data"))
 
     # pykrx도 fdr도 always지만, 값의 출처가 "설정"이 아니라 "소스"여야 한다.
-    assert output["main"].items[0].meta["adjusted"] is True
+    assert bundle.items[0].meta["adjusted"] is True

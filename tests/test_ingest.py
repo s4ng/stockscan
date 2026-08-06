@@ -25,36 +25,27 @@ from app.ingest import worker
 from app.market.instrument import InstrumentRef
 from app.providers.registry import ProviderRegistry
 from app.providers.synthetic import SyntheticProvider
-from app.schemas.pipeline import EdgeSpec, NodeSpec, PipelineSpec
 from app.storage import ohlcv_cache
 from app.storage.models import Base, IngestionJobRow
+from tests.conftest import make_config
 
 NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
 
 
-def spec(instruments: list[str], lookback: int = 30) -> PipelineSpec:
-    return PipelineSpec(
-        pipeline_id="pipe_ingest",
-        name="수집 테스트",
-        nodes=[
-            NodeSpec(
-                id="data",
-                type="marketData",
-                params={
-                    "instruments": instruments,
-                    "timeframe": "1d",
-                    "lookback": lookback,
-                    "source": "synthetic",
-                },
-            ),
-            NodeSpec(
-                id="strategy",
-                type="strategyRunner",
-                params={"strategy_id": "demo_momentum"},
-            ),
-        ],
-        edges=[EdgeSpec(id="e1", source="data", target="strategy")],
-    )
+#: synthetic 소스가 주는 목록의 앞부분. `SYNTHETIC_LISTING`과 짝을 이룬다.
+NASDAQ = ["nasdaq:AAPL", "nasdaq:MSFT"]
+KRX = ["krx:005930", "krx:000660"]
+
+
+def spec(universe: dict[str, int] | None = None):
+    """수집 대상은 **설정의 universe를 실제로 풀어서** 나온다.
+
+    ⚠️ 예전에는 `marketData` 노드의 `instruments`를 읽었는데, 설정에서 종목을 손으로
+    적는 자리가 사라졌다. 컷 조건을 여기서 다시 구현하지 않고 파이프라인과 같은
+    함수를 부르는 것이 요점이다 — 갈라지면 실행이 훑는 것과 캐시가 담는 것이
+    달라지고, 갈라진 종목은 캐시 미스로 조용히 소스를 두드린다 (3.9).
+    """
+    return make_config(universe=universe or {"nasdaq": 1})
 
 
 def context() -> RunContext:
@@ -73,19 +64,30 @@ async def maker():
 
 
 # ------------------------------------------------------------------------ 계획
-async def test_targets_come_from_the_pipeline():
-    plan = await worker.plan_targets(spec(["nasdaq:BTC", "krx:005930"]), context())
+async def test_targets_come_from_the_universe():
+    plan = await worker.plan_targets(spec({"nasdaq": 2, "krx": 2}), context())
 
-    assert {t.instrument.key for t in plan.targets} == {"nasdaq:BTC", "krx:005930"}
-    assert all(t.lookback == 30 for t in plan.targets)
-    # 노드가 소스를 못 박았으면 수집도 그것을 따른다 — 캐시를 채운 소스와
-    # 파이프라인이 쓰려던 소스가 갈리면 3.8이 그 자리에서 깨진다.
-    assert all(t.source == "synthetic" for t in plan.targets)
+    assert {t.instrument.key for t in plan.targets} == set(NASDAQ) | set(KRX)
+    assert all(t.origin == "universe" for t in plan.targets)
+
+
+async def test_depth_is_derived_from_the_strategy():
+    """★ 설정의 lookback과 전략의 워밍업이 어긋나면 그 종목이 조용히 전량 제외된다.
+
+    유도하면 어긋날 자리가 없어진다.
+    """
+    from app.config import lookback_for
+    from app.strategies.registry import load_strategy
+
+    plan = await worker.plan_targets(spec(), context())
+    expected = lookback_for(load_strategy("demo_momentum").strategy.startup_candles)
+
+    assert all(t.lookback == expected for t in plan.targets)
 
 
 async def test_end_is_the_last_closed_bar_of_each_market():
     """시장마다 마감이 다르다. 하나로 뭉뚱그리면 없는 세션의 봉을 요청한다."""
-    plan = await worker.plan_targets(spec(["nasdaq:AAPL", "krx:005930"]), context())
+    plan = await worker.plan_targets(spec({"nasdaq": 1, "krx": 1}), context())
     ends = {t.instrument.key: t.end for t in plan.targets}
 
     # NOW는 3/10 12:00 UTC — KRX는 그날 15:30 KST(06:30 UTC)에 이미 닫혔지만
@@ -96,47 +98,31 @@ async def test_end_is_the_last_closed_bar_of_each_market():
 
 
 async def test_lookback_override_wins():
-    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), context(), lookback=500)
+    plan = await worker.plan_targets(spec(), context(), lookback=500)
     assert plan.targets[0].lookback == 500
-
-
-async def test_a_universe_node_is_actually_resolved():
-    """컷 조건을 다시 구현하지 않고 노드를 돌린다 — 갈라지면 캐시가 비게 된다."""
-    pipeline = spec([])
-    pipeline.nodes.insert(
-        0,
-        NodeSpec(
-            id="universe",
-            type="symbolUniverse",
-            params={"instruments": ["nasdaq:BTC", "nasdaq:ETH"]},
-        ),
-    )
-    plan = await worker.plan_targets(pipeline, context())
-
-    assert {t.instrument.key for t in plan.targets} == {"nasdaq:BTC", "nasdaq:ETH"}
-    assert all(t.origin == "universe" for t in plan.targets)
 
 
 # ------------------------------------------------------------------------ 수집
 async def test_ingest_fills_the_cache(maker):
     ctx = context()
-    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), ctx)
+    plan = await worker.plan_targets(spec(), ctx)
     report = await worker.ingest(plan, ctx, maker)
 
+    depth = plan.targets[0].lookback
     assert report.fetched == 1
-    assert report.inserted == 30
+    assert report.inserted == depth
     async with maker() as session:
         cov = await ohlcv_cache.coverage(
-            session, InstrumentRef.parse("nasdaq:BTC"), "1d", adjusted=True
+            session, InstrumentRef.parse("nasdaq:AAPL"), "1d", adjusted=True
         )
-    assert cov.bars == 30
+    assert cov.bars == depth
     assert cov.last == plan.targets[0].end
 
 
 async def test_second_run_does_not_touch_the_source(maker):
     """하루 1회 수집이 전제다. 두 번 불러도 소스를 두 번 밟지 않는다."""
     ctx = context()
-    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), ctx)
+    plan = await worker.plan_targets(spec(), ctx)
     await worker.ingest(plan, ctx, maker)
 
     again = await worker.ingest(plan, ctx, maker)
@@ -148,11 +134,11 @@ async def test_second_run_does_not_touch_the_source(maker):
 
 async def test_one_failure_does_not_stop_the_rest(maker):
     ctx = context()
-    plan = await worker.plan_targets(spec(["nasdaq:BTC", "nasdaq:ETH"]), ctx)
+    plan = await worker.plan_targets(spec({"nasdaq": 2}), ctx)
     original = ctx.providers.fetch_ohlcv
 
     async def flaky(instrument, *args, **kwargs):
-        if instrument.symbol == "BTC":
+        if instrument.symbol == "AAPL":
             raise RuntimeError("소스가 죽었다")
         return await original(instrument, *args, **kwargs)
 
@@ -160,9 +146,9 @@ async def test_one_failure_does_not_stop_the_rest(maker):
     report = await worker.ingest(plan, ctx, maker)
 
     assert report.fetched == 1
-    assert [k for k, _ in report.failures] == ["nasdaq:BTC"]
+    assert [k for k, _ in report.failures] == ["nasdaq:AAPL"]
     async with maker() as session:
-        failed = await session.get(IngestionJobRow, ("nasdaq", "BTC", "1d", True))
+        failed = await session.get(IngestionJobRow, ("nasdaq", "AAPL", "1d", True))
     assert failed.failure_count == 1
     assert "죽었다" in failed.last_error
 
@@ -170,8 +156,8 @@ async def test_one_failure_does_not_stop_the_rest(maker):
 async def test_conflicting_closes_surface_in_the_report(maker):
     """3.8 — 두 소스가 같은 봉을 다르게 주면 수집 리포트에 뜬다."""
     ctx = context()
-    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), ctx)
-    btc = InstrumentRef.parse("nasdaq:BTC")
+    plan = await worker.plan_targets(spec(), ctx)
+    btc = InstrumentRef.parse("nasdaq:AAPL")
     end = plan.targets[0].end
 
     async with maker() as session:
@@ -208,7 +194,7 @@ async def test_delisted_targets_end_at_the_delisting_date(monkeypatch: pytest.Mo
             )
 
     monkeypatch.setattr(ctx.providers, "get", lambda pid: FakeFdr())
-    plan = await worker.plan_targets(spec(["krx:005930"]), ctx, include_delisted=True)
+    plan = await worker.plan_targets(spec({"krx": 1}), ctx, include_delisted=True)
 
     delisted = [t for t in plan.targets if t.origin == "delisted"]
     assert [t.instrument.key for t in delisted] == ["krx:221670"]
@@ -229,8 +215,8 @@ async def test_a_live_target_is_not_overwritten_by_the_delisted_list(
             )
 
     monkeypatch.setattr(ctx.providers, "get", lambda pid: FakeFdr())
-    plan = await worker.plan_targets(spec(["krx:005930"]), ctx, include_delisted=True)
+    plan = await worker.plan_targets(spec({"krx": 1}), ctx, include_delisted=True)
 
     assert len(plan.targets) == 1
-    assert plan.targets[0].origin == "pipeline"
+    assert plan.targets[0].origin == "universe"
     assert plan.targets[0].end == datetime(2026, 3, 10, 6, 30, tzinfo=UTC)

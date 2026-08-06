@@ -10,9 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
-from app.schemas.pipeline import EdgeSpec, NodeSpec, PipelineSpec
 from app.storage import repository as repo
 from app.storage.models import Base, PipelineVersionRow
+from tests.conftest import make_config
 
 
 @pytest_asyncio.fixture
@@ -26,64 +26,73 @@ async def session():
     await engine.dispose()
 
 
-def make_spec(pipeline_id: str = "", name: str = "테스트", nodes: int = 2) -> PipelineSpec:
-    return PipelineSpec(
-        pipeline_id=pipeline_id,
-        name=name,
-        nodes=[NodeSpec(id=f"n{i}", type="manualTrigger") for i in range(nodes)],
-        edges=[EdgeSpec(id="e1", source="n0", target="n1")] if nodes > 1 else [],
-    )
+def make_spec(strategy: str = "demo_momentum", size: int = 2):
+    """설정 한 벌. `pipeline_id`는 전략에서 유도되므로 따로 주지 않는다."""
+    return make_config(strategy=strategy, universe={"nasdaq": size})
 
 
 async def test_save_new_pipeline_assigns_id(session):
-    pipeline_id, version = await repo.save_pipeline(session, make_spec())
+    pipeline_id, version = await repo.save_config(session, make_spec())
     assert pipeline_id.startswith("pipe_")
     assert version == 1
 
 
 async def test_save_existing_pipeline_bumps_version(session):
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec())
-    _, v2 = await repo.save_pipeline(session, make_spec(pipeline_id, nodes=3))
-    _, v3 = await repo.save_pipeline(session, make_spec(pipeline_id, nodes=4))
+    pipeline_id, _ = await repo.save_config(session, make_spec())
+    _, v2 = await repo.save_config(session, make_spec(size=3))
+    _, v3 = await repo.save_config(session, make_spec(size=4))
     assert (v2, v3) == (2, 3)
 
 
 async def test_old_versions_are_immutable(session):
     """새 버전을 저장해도 예전 스냅샷은 그대로 남아야 한다."""
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec(nodes=2))
-    await repo.save_pipeline(session, make_spec(pipeline_id, name="바뀐 이름", nodes=5))
+    pipeline_id, _ = await repo.save_config(session, make_spec(size=2))
+    await repo.save_config(session, make_spec(size=5))
 
-    old = await repo.load_pipeline(session, pipeline_id, version=1)
-    new = await repo.load_pipeline(session, pipeline_id)
+    old = await repo.load_config(session, pipeline_id, version=1)
+    new = await repo.load_config(session, pipeline_id)
 
-    assert len(old.nodes) == 2
-    assert old.name == "테스트"
-    assert len(new.nodes) == 5
-    assert new.name == "바뀐 이름"
+    assert old.universe == {"nasdaq": 2}
+    assert new.universe == {"nasdaq": 5}
 
 
-async def test_snapshot_records_its_own_id_and_version(session):
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec())
-    await repo.save_pipeline(session, make_spec(pipeline_id))
+async def test_an_unchanged_config_does_not_bump_the_version(session):
+    """★ 매 실행마다 같은 설정을 쌓으면 버전 번호가 실행 횟수가 되어
+    '언제 설정이 바뀌었나'를 잃는다."""
+    pipeline_id, first = await repo.save_config(session, make_spec())
+    _, again = await repo.save_config(session, make_spec())
 
-    loaded = await repo.load_pipeline(session, pipeline_id, version=2)
-    assert loaded.pipeline_id == pipeline_id
-    assert loaded.version == 2
+    assert (first, again) == (1, 1)
+    assert len(await repo.list_versions(session, pipeline_id)) == 1
+
+
+async def test_the_snapshot_never_carries_the_token(session):
+    """★ 실행 이력은 백업·공유 대상이다. 비밀이 거기까지 따라가면 설정 파일
+    하나만 조심해서는 막을 수 없다."""
+    from app.config import TelegramConfig
+
+    config = make_spec().model_copy(
+        update={"telegram": TelegramConfig(token="secret", chat_id="42")}
+    )
+    await repo.save_config(session, config)
+
+    stored = await session.scalar(select(PipelineVersionRow.spec))
+    assert "telegram" not in stored
+    assert "secret" not in str(stored)
 
 
 async def test_list_pipelines_reports_active_version(session):
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec(nodes=2))
-    await repo.save_pipeline(session, make_spec(pipeline_id, nodes=7))
+    pipeline_id, _ = await repo.save_config(session, make_spec(size=2))
+    await repo.save_config(session, make_spec(size=7))
 
-    summaries = await repo.list_pipelines(session)
+    summaries = await repo.list_configs(session)
     assert len(summaries) == 1
     assert summaries[0].version == 2
-    assert summaries[0].node_count == 7
 
 
 async def test_list_versions_is_newest_first(session):
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec())
-    await repo.save_pipeline(session, make_spec(pipeline_id))
+    pipeline_id, _ = await repo.save_config(session, make_spec())
+    await repo.save_config(session, make_spec(size=9))
     versions = await repo.list_versions(session, pipeline_id)
     assert [v["version"] for v in versions] == [2, 1]
 
@@ -91,9 +100,9 @@ async def test_list_versions_is_newest_first(session):
 async def test_timestamps_round_trip_as_utc_aware(session):
     """SQLite는 tzinfo를 저장하지 않는다. naive로 새어 나오면 프론트가 로컬 시각으로
     오해해 표시가 통째로 어긋난다 (CLAUDE.md 규칙 4)."""
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec())
+    pipeline_id, _ = await repo.save_config(session, make_spec())
 
-    summaries = await repo.list_pipelines(session)
+    summaries = await repo.list_configs(session)
     updated_at = summaries[0].updated_at
     assert updated_at.tzinfo is not None
     assert updated_at.utcoffset() == timedelta(0)
@@ -106,19 +115,11 @@ async def test_timestamps_round_trip_as_utc_aware(session):
 async def test_strategy_hash_is_pinned_to_the_version(session):
     """전략을 이름으로만 참조하면 파일을 고치는 순간 과거 버전의 의미가 소급으로
     바뀐다 (CLAUDE.md 규칙 10 / §4.7)."""
-    spec = PipelineSpec(
-        pipeline_id="pipe_s",
-        nodes=[
-            NodeSpec(
-                id="s", type="strategyRunner", params={"strategy_id": "demo_momentum"}
-            )
-        ],
-    )
-    await repo.save_pipeline(session, spec)
+    await repo.save_config(session, make_spec(strategy="demo_momentum"))
 
     stored = await session.scalar(
         select(PipelineVersionRow.strategy_hashes).where(
-            PipelineVersionRow.pipeline_id == "pipe_s"
+            PipelineVersionRow.pipeline_id == "pipe_demo_momentum"
         )
     )
     assert len(stored["demo_momentum"]) == 64
@@ -126,15 +127,11 @@ async def test_strategy_hash_is_pinned_to_the_version(session):
 
 async def test_missing_strategy_records_the_reason_not_silence(session):
     """해시가 조용히 빠지면 '기록을 안 했다'와 '파일이 없었다'를 구분할 수 없다."""
-    spec = PipelineSpec(
-        pipeline_id="pipe_missing",
-        nodes=[NodeSpec(id="s", type="strategyRunner", params={"strategy_id": "없는전략"})],
-    )
-    await repo.save_pipeline(session, spec)
+    await repo.save_config(session, make_spec(strategy="없는전략"))
 
     stored = await session.scalar(
         select(PipelineVersionRow.strategy_hashes).where(
-            PipelineVersionRow.pipeline_id == "pipe_missing"
+            PipelineVersionRow.pipeline_id == "pipe_없는전략"
         )
     )
     assert stored["없는전략"].startswith("unavailable:")
@@ -142,16 +139,17 @@ async def test_missing_strategy_records_the_reason_not_silence(session):
 
 async def test_load_missing_pipeline_raises(session):
     with pytest.raises(repo.PipelineNotFoundError):
-        await repo.load_pipeline(session, "pipe_nope")
+        await repo.load_config(session, "pipe_nope")
 
 
-async def test_delete_removes_versions_too(session):
-    pipeline_id, _ = await repo.save_pipeline(session, make_spec())
-    await repo.save_pipeline(session, make_spec(pipeline_id))
-    await repo.delete_pipeline(session, pipeline_id)
+async def test_versions_are_never_overwritten(session):
+    """규칙 10 — 저장은 항상 새 버전을 **추가**한다. 기존 스냅샷은 불변이다."""
+    pipeline_id, _ = await repo.save_config(session, make_spec(size=2))
+    await repo.save_config(session, make_spec(size=9))
 
-    assert await repo.list_pipelines(session) == []
-    assert await repo.list_versions(session, pipeline_id) == []
+    versions = await repo.list_versions(session, pipeline_id)
+    assert [v["version"] for v in versions] == [2, 1]
+    assert (await repo.load_config(session, pipeline_id, version=1)).universe == {"nasdaq": 2}
 
 
 def test_sqlite_path_is_anchored_to_the_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path):

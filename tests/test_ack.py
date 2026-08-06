@@ -180,7 +180,7 @@ async def test_the_scheduler_writes_acks_and_confirms_them(monkeypatch, maker, t
 
     channel = SpyChannel()
     channel.pending = [AckResponse(signal_id, acted=True, callback_id="cb1")]
-    scheduler = serve.Scheduler(channel, load_spec=lambda: None)
+    scheduler = serve.Scheduler(channel, load_config=lambda: None)
 
     written = await scheduler.collect_acks()
 
@@ -202,7 +202,7 @@ async def test_an_ack_for_an_unknown_signal_tells_the_user(monkeypatch, maker):
 
     channel = SpyChannel()
     channel.pending = [AckResponse(404, acted=False, callback_id="cb2")]
-    scheduler = serve.Scheduler(channel, load_spec=lambda: None)
+    scheduler = serve.Scheduler(channel, load_config=lambda: None)
 
     assert await scheduler.collect_acks() == 0
     assert "찾지 못했습니다" in channel.confirmed[0][1]

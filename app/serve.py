@@ -21,12 +21,12 @@ from datetime import UTC, datetime
 from itertools import zip_longest
 from typing import Any
 
+from app import config as app_config
 from app import service
 from app.alerts import AckResponse, AlertChannel, Delivery, ack_buttons
-from app.cli import pipeline_file
+from app.config import AppConfig
 from app.core.formatting import format_price_change
 from app.schedule import Schedule, ScheduleEntry, moments_around
-from app.schemas.pipeline import PipelineSpec
 from app.storage import db, history
 
 #: 다음 발화까지 남았어도 이만큼마다 깨어난다.
@@ -85,13 +85,13 @@ class Scheduler:
         channel: AlertChannel,
         state: SchedulerState | None = None,
         *,
-        load_spec: Callable[[], PipelineSpec] = pipeline_file.load,
+        load_config: Callable[[], AppConfig] = app_config.load,
         run: RunFn = service.execute_run,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.channel = channel
         self.state = state or SchedulerState()
-        self._load_spec = load_spec
+        self._load_config = load_config
         self._run = run
         self._clock = clock
         #: 마지막으로 판단한 시각. 발화 조건은 **"이 시각과 지금 사이를 지났는가"**다.
@@ -105,14 +105,14 @@ class Scheduler:
     def refresh(self, now: datetime) -> Schedule | None:
         """설정을 다시 읽어 스케줄을 갱신한다. 실패는 상태에 남기고 루프는 계속 돈다."""
         try:
-            spec = self._load_spec()
-            schedule = Schedule.from_spec(spec)
+            config = self._load_config()
+            schedule = Schedule.from_config(config)
         except Exception as exc:  # noqa: BLE001 - 설정이 깨져도 프로세스는 살아 있어야 한다
             self.state.error = f"설정을 읽지 못했습니다 — {exc}"
             self.state.schedule = None
             return None
 
-        self.state.error = None if schedule else "설정에 scheduleTrigger 노드가 없습니다."
+        self.state.error = None if schedule else "설정에 schedule.at이 비어 있습니다."
         self.state.schedule = schedule
         if schedule:
             upcoming = schedule.next_fire(now)
@@ -198,9 +198,7 @@ class Scheduler:
 
     async def _fire(self, entry: ScheduleEntry, now: datetime) -> None:
         try:
-            spec = self._load_spec()
-            if entry.market:
-                spec, _ = pipeline_file.filter_by_market(spec, entry.market)
+            config = self._load_config()
         except Exception as exc:  # noqa: BLE001
             self.state.record(Fire(now, entry.label(), ok=False, detail=f"설정 오류 — {exc}"))
             return
@@ -211,7 +209,7 @@ class Scheduler:
         async with service.run_lock():
             try:
                 outcome = await self._run(
-                    spec,
+                    config,
                     commit=True,  # 스케줄 실행은 기록이 목적이다
                     allow_alerts=True,  # ★ 알림이 열리는 유일한 자리 (12.2)
                     warn=warnings.append,
@@ -220,7 +218,7 @@ class Scheduler:
                 self.state.record(Fire(now, entry.label(), ok=False, detail=str(exc)))
                 await self._send(f"⚠️ 실행 실패 [{entry.label()}] — {exc}")
                 return
-            service.write_report(outcome, spec, warnings.append)
+            service.write_report(outcome, config, warnings.append)
 
         fire = Fire(
             now,

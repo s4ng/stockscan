@@ -1,7 +1,7 @@
 """RunContext — 실행 컨텍스트 (ARCHITECTURE.md 4.2).
 
-노드는 `datetime.now()`를 직접 호출하지 않는다. 모든 시각은 여기서 주입된다.
-이 규칙이 백테스트와 실거래를 같은 코드 경로로 묶는 유일한 장치다.
+파이프라인과 전략은 `datetime.now()`를 직접 호출하지 않는다. 모든 시각은 여기서
+주입된다. 이 규칙이 백테스트와 실거래를 같은 코드 경로로 묶는 유일한 장치다.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from app.engine.signals import CollectingSink, SignalSink
@@ -18,9 +19,36 @@ from app.market.instrument import InstrumentRef
 from app.providers.ohlcv_source import DirectSource, OhlcvSource
 from app.providers.registry import ProviderRegistry, default_registry
 from app.providers.universe_source import DirectUniverse, UniverseSource
-from app.schemas.pipeline import ExecutionMode, PipelineSettings
 
 UTC = ZoneInfo("UTC")
+
+
+class ExecutionMode(StrEnum):
+    """실행 모드. 기본은 notify이며 실주문은 명시적으로 켜야 한다."""
+
+    BACKTEST = "backtest"
+    SHADOW = "shadow"
+    """실시간으로 돌리되 알림을 보내지 않고 signals에만 기록."""
+    NOTIFY = "notify"
+    PAPER = "paper"
+    LIVE = "live"
+
+
+@dataclass(frozen=True)
+class RunSettings:
+    """실행 전역 설정. **사람이 적는 것이 아니라 유도되거나 고정된 값이다.**
+
+    2026-08-06에 `PipelineSettings`에서 이름이 바뀌었다 — 설정 파일에서 오는 것은
+    `user_timezone` 하나뿐이고 나머지는 상수이기 때문이다.
+    """
+
+    user_timezone: str = "Asia/Seoul"
+    """표시용 타임존. 저장은 항상 UTC (규칙 5)."""
+
+    adjusted: bool = True
+    """수정주가 사용 여부. **캐시 키에 포함된다** (규칙 8) — 섞이면 지표가 조용히 틀어진다."""
+
+    default_mode: ExecutionMode = ExecutionMode.NOTIFY
 
 
 @dataclass
@@ -65,7 +93,7 @@ class RunContext:
     now: datetime
     """이 실행이 기준으로 삼는 시각 (tz-aware UTC). 노드는 이 값만 써야 한다."""
 
-    settings: PipelineSettings
+    settings: RunSettings
     providers: ProviderRegistry
     calendars: dict[str, MarketCalendar]
     ohlcv: OhlcvSource | None = None
@@ -180,7 +208,7 @@ class RunContext:
     @classmethod
     def create(
         cls,
-        settings: PipelineSettings | None = None,
+        settings: RunSettings | None = None,
         mode: ExecutionMode | None = None,
         now: datetime | None = None,
         providers: ProviderRegistry | None = None,
@@ -193,7 +221,7 @@ class RunContext:
         commit: bool = False,
         allow_alerts: bool = False,
     ) -> RunContext:
-        settings = settings or PipelineSettings()
+        settings = settings or RunSettings()
         resolved_now = now or datetime.now(UTC)
         if resolved_now.tzinfo is None:
             raise ValueError("now는 tz-aware여야 합니다 (UTC 권장)")

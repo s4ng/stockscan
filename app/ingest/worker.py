@@ -27,16 +27,20 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config import TIMEFRAME, AppConfig, lookback_for
 from app.engine.context import RunContext
-from app.engine.types import Bundle
 from app.market.calendar import CalendarRangeError
 from app.market.instrument import InstrumentRef
-from app.market.timeframe import normalize
-from app.nodes.inputs.symbol_universe import UNIVERSE_KEY, SymbolUniverseNode
+from app.pipeline import list_venue
 from app.providers.ohlcv_source import adjusted_of, predicted_adjusted
 from app.providers.registry import AUTO
 from app.storage import ohlcv_cache
 from app.storage.models import IngestionJobRow
+from app.strategies.base import StrategyError
+from app.strategies.registry import load_strategy
+
+#: 전략을 못 읽었을 때의 수집 깊이. 12개월 팩터도 담기는 값이다.
+DEFAULT_DEPTH = 320
 
 #: 폐지 종목을 어디까지 거슬러 올라가 모을 것인가. FDR의 폐지 목록은 1990년대까지
 #: 있는데 그때 봉은 지금 전략의 유니버스와 무관하고 조회도 자주 실패한다.
@@ -117,39 +121,33 @@ class IngestReport:
 
 # ------------------------------------------------------------------------ 계획
 async def plan_targets(
-    spec: Any,
+    config: AppConfig,
     ctx: RunContext,
     *,
     lookback: int | None = None,
     include_delisted: bool = False,
     delisted_since: date | None = None,
 ) -> Plan:
-    """파이프라인이 참조하는 instrument의 합집합을 수집 대상으로 편다.
+    """설정이 훑는 종목의 합집합을 수집 대상으로 편다.
 
-    유니버스 노드를 실제로 **실행해서** 목록을 얻는다. 컷 조건(거래대금 상위 N,
-    결제 통화)을 여기서 다시 구현하면 파이프라인이 훑는 것과 캐시가 담는 것이
-    갈라지고, 갈라진 종목은 실행 때 캐시 미스로 조용히 소스를 두드린다.
+    ★ **유니버스 산출을 다시 구현하지 않고 파이프라인과 같은 함수를 부른다**
+    (`pipeline._list_venue`). 컷 조건을 여기서 다시 적으면 실행이 훑는 것과 캐시가
+    담는 것이 갈라지고, 갈라진 종목은 실행 때 캐시 미스로 조용히 소스를 두드린다.
+
+    ★ **수집 깊이도 전략에서 유도한다** — 설정의 `lookback`과 전략의
+    `startup_candles`가 어긋나 종목이 통째로 워밍업 부족으로 빠지는 사고를 막는다.
     """
     plan = Plan()
-    universe = await _resolve_universe(spec, ctx, plan)
+    universe = await _resolve_universe(config, ctx, plan)
+    depth = lookback or _depth_for(config, plan)
 
     seen: dict[tuple[str, str], IngestTarget] = {}
-    for node in spec.nodes:
-        if node.type != "marketData":
+    for raw in universe:
+        instrument = InstrumentRef.parse(raw)
+        end = _last_closed(instrument, TIMEFRAME, ctx, plan)
+        if end is None:
             continue
-        timeframe = normalize(node.params.get("timeframe", "1d"))
-        depth = lookback or int(node.params.get("lookback", 200))
-        source = str(node.params.get("source") or AUTO)
-        fixed = [str(s) for s in (node.params.get("instruments") or [])]
-        keys = fixed or universe
-        origin = "pipeline" if fixed else "universe"
-
-        for raw in keys:
-            instrument = InstrumentRef.parse(raw)
-            end = _last_closed(instrument, timeframe, ctx, plan)
-            if end is None:
-                continue
-            _add(seen, IngestTarget(instrument, timeframe, depth, end, origin, source))
+        _add(seen, IngestTarget(instrument, TIMEFRAME, depth, end, "universe", AUTO))
 
     if include_delisted:
         await _add_delisted(seen, ctx, plan, lookback or 500, delisted_since)
@@ -157,27 +155,32 @@ async def plan_targets(
     plan.targets = list(seen.values())
     if not plan.targets:
         plan.notes.append(
-            "수집 대상이 없습니다. 파이프라인에 marketData 노드가 있는지, "
-            "유니버스가 비어 있지 않은지 확인하세요."
+            "수집 대상이 없습니다. 설정의 universe가 비어 있지 않은지 확인하세요."
         )
     return plan
 
 
-async def _resolve_universe(spec: Any, ctx: RunContext, plan: Plan) -> list[str]:
+def _depth_for(config: AppConfig, plan: Plan) -> int:
+    """전략의 워밍업에서 수집 깊이를 유도한다."""
+    try:
+        loaded = load_strategy(config.strategy)
+    except StrategyError as exc:
+        plan.notes.append(f"전략을 읽지 못해 기본 깊이를 씁니다: {exc}")
+        return DEFAULT_DEPTH
+    return lookback_for(loaded.strategy.startup_candles)
+
+
+async def _resolve_universe(config: AppConfig, ctx: RunContext, plan: Plan) -> list[str]:
     keys: list[str] = []
-    for node in spec.nodes:
-        if node.type != "symbolUniverse":
-            continue
-        params = SymbolUniverseNode.parse_params(node.params)
+    for venue, size in config.universe.items():
         try:
-            output = await SymbolUniverseNode().run({}, params, ctx.bind(node.id))
-        except Exception as exc:  # noqa: BLE001 - 한 노드가 죽어도 나머지는 모은다
-            plan.notes.append(f"유니버스 노드 {node.id}를 풀지 못했습니다: {exc}")
+            refs, _ = await list_venue(venue, size, ctx.bind("universe"))
+        except Exception as exc:  # noqa: BLE001 - 한 venue가 죽어도 나머지는 모은다
+            plan.notes.append(f"{venue} 유니버스를 풀지 못했습니다: {exc}")
             continue
-        bundle: Bundle = output["main"]
-        for key in bundle.context.get(UNIVERSE_KEY, []):
-            if key not in keys:
-                keys.append(str(key))
+        for ref in refs:
+            if ref.key not in keys:
+                keys.append(ref.key)
     return keys
 
 

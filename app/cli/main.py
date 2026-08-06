@@ -20,13 +20,13 @@ from zoneinfo import ZoneInfo
 
 import typer
 
-import app.nodes  # noqa: F401  — @register 실행 (노드 레지스트리 채우기)
+from app import config as app_config
 from app import service
 from app.alerts import default_channel
 from app.backtest import ReplayResult
-from app.cli import pipeline_file
 from app.cli.output import ExitCode, Out, table
 from app.cli.templates import STRATEGY_TEMPLATE
+from app.config import AppConfig, ConfigError
 from app.core.config import get_settings
 from app.core.formatting import (
     format_price,
@@ -34,11 +34,9 @@ from app.core.formatting import (
     format_time,
     timezone_label,
 )
-from app.engine.graph import PipelineValidationError, validate
-from app.engine.runner import NodeStatus, RunStatus
+from app.engine.context import ExecutionMode, RunSettings
 from app.market.timeframe import JUDGEMENT
-from app.nodes.registry import catalog
-from app.schemas.pipeline import ExecutionMode, PipelineSettings, PipelineSpec
+from app.pipeline import RunStatus, StageStatus
 from app.storage import db, history
 from app.strategies.check import check_file
 from app.strategies.registry import (
@@ -68,8 +66,8 @@ LimitOpt = Annotated[int, typer.Option("--limit", min=1, max=1000, help="최대 
 # =============================================================================== run
 @cli.command()
 def run(
-    pipeline: Annotated[
-        Path | None, typer.Option("--pipeline", "-p", help="파이프라인 정의 JSON 경로")
+    config_path: Annotated[
+        Path | None, typer.Option("--config", "-c", help="설정 파일 경로")
     ] = None,
     market: Annotated[
         str | None, typer.Option("--market", help="krx | us — 해당 시장만 실행")
@@ -106,50 +104,48 @@ def run(
     if commit and dry_run:
         out.fail(ExitCode.VALIDATION, "--commit과 --dry-run은 함께 쓸 수 없습니다.")
 
-    spec = _load_spec(out, pipeline)
+    config = _load_config(out, config_path)
     dropped: list[str] = []
     if market:
         try:
-            spec, dropped = pipeline_file.filter_by_market(spec, market)
-        except pipeline_file.PipelineFileError as exc:
+            narrowed = config.for_market(market)
+        except ConfigError as exc:
             out.fail(ExitCode.VALIDATION, str(exc))
-        if pipeline_file.has_empty_universe(spec):
-            out.progress(f"'{market}' 시장에 해당하는 종목이 없어 실행하지 않습니다.")
+        dropped = [v for v in config.universe if v not in narrowed.universe]
+        config = narrowed
+        if not config.universe:
+            out.progress(f"'{market}' 시장에 해당하는 venue가 없어 실행하지 않습니다.")
             out.emit({"ok": True, "status": "skipped", "market": market, "signals": []})
             raise typer.Exit(int(ExitCode.OK))
 
-    outcome = asyncio.run(_execute(out, spec, mode, now, commit))
-    _report_run(out, outcome, spec, dropped, limit, report)
+    outcome = asyncio.run(_execute(out, config, mode, now, commit))
+    _report_run(out, outcome, config, dropped, limit, report)
 
 
 async def _execute(
     out: Out,
-    spec: PipelineSpec,
+    config: AppConfig,
     mode: ExecutionMode | None,
     now_raw: str | None,
     commit: bool,
 ) -> service.RunOutcome:
-    """실행 본체는 `app/service.py`에 있다 — 웹 UI도 **같은 함수**를 부른다.
+    """실행 본체는 `app/service.py`에 있다 — 스케줄러도 **같은 함수**를 부른다.
 
-    여기 남은 것은 CLI의 몫뿐이다: 시각 파싱, 검증 실패의 종료 코드, 경고 출력.
+    여기 남은 것은 CLI의 몫뿐이다: 시각 파싱, 실패의 종료 코드, 경고 출력.
     """
-    try:
-        return await service.execute_run(
-            spec,
-            mode=mode,
-            now=_parse_now(out, now_raw),
-            commit=commit,
-            warn=out.warn,
-        )
-    except PipelineValidationError as exc:
-        out.fail(ExitCode.VALIDATION, str(exc), {"issues": exc.result.to_dict()["issues"]})
-        raise  # pragma: no cover - fail이 이미 Exit를 던진다
+    return await service.execute_run(
+        config,
+        mode=mode,
+        now=_parse_now(out, now_raw),
+        commit=commit,
+        warn=out.warn,
+    )
 
 
 def _report_run(
     out: Out,
     outcome: service.RunOutcome,
-    spec: PipelineSpec,
+    config: AppConfig,
     dropped: list[str],
     limit: int,
     report: bool,
@@ -158,8 +154,8 @@ def _report_run(
     # 리포트에는 --limit과 무관하게 전부 싣는다. stdout은 좁게, 파일은 넓게가
     # 맞는 배분이다 — 좁혀야 하는 쪽은 사람과 LLM이 읽는 화면이다 (12.4).
     signals = outcome.signals[:limit]
-    failed = [n for n in result.nodes if n.status is NodeStatus.ERROR]
-    written = service.write_report(outcome, spec, out.warn) if report else None
+    failed = [n for n in result.nodes if n.status is StageStatus.ERROR]
+    written = service.write_report(outcome, config, out.warn) if report else None
 
     payload = {
         "ok": result.status is not RunStatus.FAILED and not failed,
@@ -190,7 +186,7 @@ def _report_run(
     }
 
     # 저장은 UTC, 표시만 사용자 타임존 (규칙 5).
-    tz = spec.settings.user_timezone
+    tz = config.timezone
     label = timezone_label(tz)
     human = [
         f"실행 {result.run_id} · {result.pipeline_id} · mode={result.mode} · {result.status}",
@@ -248,7 +244,7 @@ def backtest(
     strategy: Annotated[
         str | None, typer.Option("--strategy", help="전략 id. 기본은 설정 파일의 전략")
     ] = None,
-    pipeline: Annotated[Path | None, typer.Option("--pipeline", "-p")] = None,
+    config_path: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     report: Annotated[
         bool, typer.Option("--report/--no-report", help="정적 HTML 리포트를 씁니다")
     ] = True,
@@ -267,14 +263,14 @@ def backtest(
     부작용은 없습니다 — `signals`를 남기지 않고 봉도 소비하지 않습니다.
     """
     out = Out(as_json)
-    spec = _load_spec(out, pipeline)
+    config = _load_config(out, config_path)
     start_date = _parse_date(out, start, "--start")
     end_date = _parse_date(out, end, "--end") if end else datetime.now(UTC).date()
 
     result = _service_call(
         out,
         service.execute_backtest(
-            spec,
+            config,
             instrument=instrument,
             start=start_date,
             end=end_date,
@@ -283,19 +279,19 @@ def backtest(
             progress=out.progress,
         ),
     )
-    _report_backtest(out, result, spec, report, limit)
+    _report_backtest(out, result, config, report, limit)
 
 
 def _report_backtest(
-    out: Out, result: ReplayResult, spec: PipelineSpec, report: bool, limit: int
+    out: Out, result: ReplayResult, config: AppConfig, report: bool, limit: int
 ) -> None:
-    written = service.write_backtest(result, spec, out.warn) if report else None
+    written = service.write_backtest(result, config, out.warn) if report else None
 
     payload = {"ok": True, **result.to_dict(), "report": str(written) if written else None}
     payload["signals"] = payload["signals"][:limit]
     payload["truncated"] = max(0, len(result.signal_days) - limit)
 
-    tz = spec.settings.user_timezone
+    tz = config.timezone
     label = timezone_label(tz)
     human = [
         f"백테스트 {result.instrument.key}"
@@ -419,7 +415,7 @@ def serve() -> None:
     # 스케줄이 없거나 채널이 없으면 **시작할 때** 말한다. 하루가 지난 뒤
     # "왜 아무것도 안 왔지"가 되면 늦다 (미구현을 성공처럼 보이지 않게 한다).
     try:
-        schedule = Schedule.from_spec(pipeline_file.load())
+        schedule = Schedule.from_config(app_config.load())
     except Exception as exc:  # noqa: BLE001
         schedule = None
         out.warn(f"설정을 읽지 못해 스케줄이 돌지 않습니다 — {exc}")
@@ -454,7 +450,7 @@ def ingest(
     venue: Annotated[
         str | None, typer.Option("--venue", help="수집할 venue (예: krx, nasdaq)")
     ] = None,
-    pipeline: Annotated[Path | None, typer.Option("--pipeline", "-p")] = None,
+    config_path: Annotated[Path | None, typer.Option("--config", "-c")] = None,
     lookback: Annotated[
         int | None,
         typer.Option("--lookback", min=2, max=20000, help="봉 개수. 기본은 파이프라인 값"),
@@ -482,13 +478,15 @@ def ingest(
     막혀도 이미 쌓인 이력으로 파이프라인과 백테스트가 계속 돕니다.
     """
     out = Out(as_json)
-    spec = _load_spec(out, pipeline)
-    asyncio.run(_ingest(out, spec, venue, lookback, include_delisted, force, now, commit, limit))
+    config = _load_config(out, config_path)
+    asyncio.run(
+        _ingest(out, config, venue, lookback, include_delisted, force, now, commit, limit)
+    )
 
 
 async def _ingest(  # noqa: PLR0913 - CLI 플래그를 그대로 옮긴 것뿐이다
     out: Out,
-    spec: PipelineSpec,
+    config: AppConfig,
     venue: str | None,
     lookback: int | None,
     include_delisted: bool,
@@ -498,7 +496,7 @@ async def _ingest(  # noqa: PLR0913 - CLI 플래그를 그대로 옮긴 것뿐�
     limit: int,
 ) -> None:
     outcome = await service.execute_ingest(
-        spec,
+        config,
         venue=venue,
         lookback=lookback,
         include_delisted=include_delisted,
@@ -596,26 +594,27 @@ def describe(as_json: JsonOpt = False) -> None:
             entry.update({"loadable": False, "error": str(exc)})
         strategies.append(entry)
 
-    spec: PipelineSpec | None = None
-    pipeline_info: dict[str, Any] = {"path": str(pipeline_file.default_path()), "loaded": False}
+    config_info: dict[str, Any] = {"path": str(app_config.default_path()), "loaded": False}
     try:
-        spec = pipeline_file.load()
-    except pipeline_file.PipelineFileError as exc:
-        pipeline_info["error"] = str(exc)
+        config = app_config.load()
+    except ConfigError as exc:
+        config_info["error"] = str(exc)
     else:
-        issues = validate(spec, spec.settings.default_mode)
-        universe = pipeline_file.universe_summary(spec)
-        pipeline_info = {
-            "path": str(pipeline_file.default_path()),
+        config_info = {
+            "path": str(app_config.default_path()),
             "loaded": True,
-            "pipeline_id": spec.pipeline_id,
-            "name": spec.name,
-            "nodes": len(spec.nodes),
-            "universe": universe,
-            "universe_size": universe["fixed_size"],
-            "strategies": pipeline_file.strategy_ids(spec),
-            "valid": issues.ok,
-            "issues": [i.to_dict() for i in issues.issues],
+            "pipeline_id": config.pipeline_id,
+            "strategy": config.strategy,
+            "universe": dict(config.universe),
+            "universe_summary": config.describe_universe(),
+            "timezone": config.timezone,
+            "schedule": [t.strftime("%H:%M") for t in config.schedule.at],
+            "heartbeat": (
+                config.schedule.heartbeat.strftime("%H:%M")
+                if config.schedule.heartbeat
+                else None
+            ),
+            "alerts": "telegram" if all(config.telegram.resolved()) else "log",
         }
 
     last = asyncio.run(_last_run())
@@ -625,8 +624,7 @@ def describe(as_json: JsonOpt = False) -> None:
         "config_dir": str(settings.resolve(".")),
         "strategies_dir": str(strategies_dir()),
         "strategies": strategies,
-        "pipeline": pipeline_info,
-        "nodes": [{"type": n["type"], "category": n["category"]} for n in catalog()],
+        "config": config_info,
         "timeframes": sorted(JUDGEMENT),
         # 설정값 그대로가 아니라 **실제로 열 경로**를 낸다. 상대 경로는 설정 디렉터리
         # 기준이라, 적힌 값만 보여 주면 "그래서 어느 파일인가"에 답하지 못한다.
@@ -650,11 +648,18 @@ def describe(as_json: JsonOpt = False) -> None:
             or ["  (전략 없음 — `marketscan strategy new <이름>`으로 만드세요)"]
         ),
         "",
-        f"파이프라인 {pipeline_info.get('pipeline_id', '-')} "
-        f"· 노드 {pipeline_info.get('nodes', 0)}개 "
-        f"· 유니버스 {pipeline_file.describe_universe(pipeline_info['universe'])
-                     if pipeline_info.get('loaded') else '-'} "
-        f"· 검증 {'통과' if pipeline_info.get('valid') else '실패'}",
+        f"설정 {config_info['path']}"
+        + ("" if config_info["loaded"] else f" — ⚠️ {config_info.get('error', '읽지 못했습니다')}"),
+        *(
+            [
+                f"전략 {config_info['strategy']} · 유니버스 {config_info['universe_summary']}",
+                f"스케줄 {' · '.join(config_info['schedule']) or '(없음)'}"
+                f" · 하트비트 {config_info['heartbeat'] or '(없음)'}"
+                f" · 알림 {config_info['alerts']}",
+            ]
+            if config_info["loaded"]
+            else []
+        ),
         f"마지막 실행 {last['run_id'] if last else '(없음)'}",
         "캐시 커버리지 — `marketscan ingest`가 대상별로 보여 줍니다",
     ]
@@ -813,10 +818,10 @@ def _display_tz() -> str:
     """읽기 전용 명령의 표시 타임존.
 
     `explain`·`signals`는 파이프라인을 읽지 않으므로 그 설정을 볼 수 없다.
-    `PipelineSettings`의 기본값을 그대로 쓴다 — 표시 규약의 출처를 두 곳에 두면
+    `RunSettings`의 기본값을 그대로 쓴다 — 표시 규약의 출처를 두 곳에 두면
     같은 신호가 명령마다 다른 시각으로 보인다.
     """
-    return PipelineSettings().user_timezone
+    return RunSettings().user_timezone
 
 
 def _display_tz_label() -> str:
@@ -1051,10 +1056,10 @@ def _data_origin(data: dict[str, Any]) -> str:
     return f"{source}({', '.join(cached)})" if cached else str(source)
 
 
-def _load_spec(out: Out, pipeline: Path | None) -> PipelineSpec:
+def _load_config(out: Out, path: Path | None) -> AppConfig:
     try:
-        return pipeline_file.load(pipeline)
-    except pipeline_file.PipelineFileError as exc:
+        return app_config.load(path)
+    except ConfigError as exc:
         out.fail(ExitCode.VALIDATION, str(exc))
         raise  # pragma: no cover
 

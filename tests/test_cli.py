@@ -22,49 +22,29 @@ from app.storage import db
 
 runner = CliRunner()
 
-PIPELINE = {
-    "pipeline_id": "pipe_test",
-    "name": "테스트",
-    "settings": {"default_mode": "notify"},
-    "nodes": [
-        {
-            "id": "data",
-            "type": "marketData",
-            "params": {
-                "instruments": ["nasdaq:BTC", "krx:005930", "nasdaq:AAPL"],
-                "timeframe": "1d",
-                "lookback": 80,
-                # 테스트는 네트워크를 타지 않는다. 기본 라우팅은 코인을 실물
-                # 거래소로 보내므로(DEFAULT_ROUTES) 소스를 못 박는다.
-                "source": "synthetic",
-            },
-        },
-        {
-            "id": "strategy",
-            "type": "strategyRunner",
-            "params": {"strategy_id": "demo_momentum", "params": {"top_pct": 1.0}},
-        },
-        {"id": "persist", "type": "persistSignal", "params": {}},
-    ],
-    "edges": [
-        {"id": "e1", "source": "data", "target": "strategy"},
-        {"id": "e2", "source": "strategy", "target": "persist"},
-    ],
-}
+CONFIG = """
+timezone: Asia/Seoul
+universe:
+  nasdaq: 6
+strategy: demo_momentum
+schedule:
+  at: ["15:40"]
+  heartbeat: "09:00"
+"""
 
 NOW = "2026-03-10T12:00:00Z"
 
 
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """DB와 파이프라인 파일을 tmp_path로 격리한다."""
-    pipeline_path = tmp_path / "pipeline.json"
-    pipeline_path.write_text(json.dumps(PIPELINE, ensure_ascii=False), encoding="utf-8")
+    """DB와 설정 파일을 tmp_path로 격리한다."""
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(CONFIG, encoding="utf-8")
 
     settings = get_settings()
-    monkeypatch.setattr(settings, "pipeline_path", pipeline_path)
-    # 전략은 파이프라인 파일 옆에서 찾는 것이 기본이다. 여기서는 파이프라인만
-    # tmp_path로 옮기므로 전략 디렉터리를 저장소 예제로 못 박는다.
+    monkeypatch.setattr(settings, "config_path", config_path)
+    # 전략은 설정 파일 옆에서 찾는 것이 기본이다. 여기서는 설정만 tmp_path로
+    # 옮기므로 전략 디렉터리를 저장소 예제로 못 박는다.
     monkeypatch.setattr(settings, "strategies_dir", SAMPLE_DIR)
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}")
     yield tmp_path
@@ -134,7 +114,7 @@ def test_bar_gate_survives_a_new_process(workspace: Path):
     def collected(body: dict) -> int:
         return next(n["items"] for n in body["nodes"] if n["node_id"] == "data")
 
-    assert collected(first) == 3
+    assert collected(first) == 6
     assert collected(second) == 0
 
 
@@ -166,8 +146,8 @@ def test_dry_run_does_not_consume_bars(workspace: Path):
     def collected(body: dict) -> int:
         return next(n["items"] for n in body["nodes"] if n["node_id"] == "data")
 
-    assert collected(first) == 3
-    assert collected(second) == 3  # 봉을 삼키지 않았다
+    assert collected(first) == 6
+    assert collected(second) == 6  # 봉을 삼키지 않았다
     assert payload(invoke("signals", "list", "--json"))["count"] == 0
 
 
@@ -209,35 +189,24 @@ def test_dry_run_still_fills_the_cache(
 
 
 # --------------------------------------------------------------------- 종료 코드
-def test_zero_signals_still_exits_zero(workspace: Path, tmp_path: Path):
-    """4.1이 빈 Bundle을 정상이라고 정했으므로 자동 실행이 매일 실패로 잡히면 안 된다."""
-    spec = json.loads(json.dumps(PIPELINE))
-    # 워밍업(60봉)에 못 미치는 lookback → 전 종목이 제외되어 신호가 0건이 된다
-    spec["nodes"][0]["params"]["lookback"] = 10
-    path = tmp_path / "short.json"
-    path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+def test_zero_signals_still_exits_zero(workspace: Path):
+    """4.1이 빈 Bundle을 정상이라고 정했으므로 자동 실행이 매일 실패로 잡히면 안 된다.
 
-    result = invoke("run", "-p", str(path), "--now", NOW, "--json")
+    두 번째 `--commit`은 Fresh Bar Gate에 걸려 0건이 된다 — 정상이다.
+    """
+    invoke("run", "--now", NOW, "--commit", "--json")
+
+    result = invoke("run", "--now", NOW, "--commit", "--json")
+
     assert result.exit_code == 0
     body = payload(result)
     assert body["signal_count"] == 0
     assert body["ok"] is True
 
 
-def test_missing_pipeline_file_exits_three(tmp_path: Path):
-    result = invoke("run", "-p", str(tmp_path / "nope.json"))
+def test_missing_config_file_exits_three(tmp_path: Path):
+    result = invoke("run", "-c", str(tmp_path / "nope.yml"))
     assert result.exit_code == 3
-
-
-def test_intraday_timeframe_exits_three(workspace: Path, tmp_path: Path):
-    spec = json.loads(json.dumps(PIPELINE))
-    spec["nodes"][0]["params"]["timeframe"] = "1h"
-    path = tmp_path / "intraday.json"
-    path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
-
-    result = invoke("run", "-p", str(path), "--json")
-    assert result.exit_code == 3
-    assert "판단 단위는" in result.stdout
 
 
 def test_bad_now_exits_three(workspace: Path):
@@ -248,14 +217,20 @@ def test_bad_now_exits_three(workspace: Path):
 def test_json_output_is_parseable(workspace: Path):
     """진행 로그가 stdout에 섞이면 LLM 쪽 파싱이 깨진다."""
     body = payload(invoke("run", "--now", NOW, "--json"))
-    assert body["pipeline_id"] == "pipe_test"
+    assert body["pipeline_id"] == "pipe_demo_momentum"
     assert isinstance(body["signals"], list)
 
 
 def test_limit_caps_signal_output(workspace: Path):
+    """`--limit`은 **화면만** 자른다. 리포트에는 전량이 실린다 (12.4)."""
+    full = payload(invoke("run", "--now", NOW, "--json"))
+    total = full["signal_count"]
+
     body = payload(invoke("run", "--now", NOW, "--json", "--limit", "1"))
-    assert len(body["signals"]) == 1
-    assert body["truncated"] >= 1
+
+    assert len(body["signals"]) == min(1, total)
+    assert body["signal_count"] == total  # 센 것은 그대로다
+    assert body["truncated"] == max(0, total - 1)
 
 
 def test_ohlcv_is_never_in_the_default_output(workspace: Path):
@@ -299,18 +274,18 @@ def test_explain_returns_the_evidence_chain(workspace: Path):
 def test_explain_records_what_the_rank_was_measured_against(workspace: Path):
     """분모(`universe_size`)는 **그 시장에서** 점수가 나온 종목 수다 (규칙 17).
 
-    이 파이프라인은 코인·한국·미국 한 종목씩이라 랭킹 풀이 셋으로 갈린다.
-    `universe_scanned`(훑은 전체)와 `universe_size`(내 풀의 크기)가 다른 것이
-    정상이고, `rank_pool`이 없으면 "1 / 1"이 무엇의 1인지 알 수 없다.
+    `universe_scanned`(훑은 전체)와 `universe_size`(내 풀의 크기)를 같은 말로
+    읽으면 "30개 중 2등"으로 오해한다 — 봉이 모자란 종목이 비교 대상에서 이미
+    빠져 있다. `rank_pool`이 없으면 그 분모가 무엇의 분모인지 알 수 없다.
     """
     invoke("run", "--now", NOW, "--commit")
     signal_id = payload(invoke("signals", "list", "--json"))["signals"][0]["id"]
 
     features = payload(invoke("explain", str(signal_id), "--json"))["strategy"]["features"]
 
-    assert features["universe_scanned"] == 3  # 훑은 종목 전체
-    assert features["universe_size"] == 1  # 그중 같은 시장에서 점수가 나온 종목
-    assert features["rank_pool"] in {"us", "krx"}
+    assert features["universe_scanned"] == 6  # 훑은 종목 전체
+    assert features["universe_size"] == 6  # 그중 같은 시장에서 점수가 나온 종목
+    assert features["rank_pool"] == "us"
 
 
 @pytest.mark.parametrize(
@@ -384,19 +359,17 @@ def test_strategy_check_fails_on_future_reference(
 
 
 # ------------------------------------------------------------------ 파이프라인 형식
-def test_yaml_pipeline_is_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """형식은 YAML로 확정됐다 (11장 4번). 6장 스키마는 그대로다."""
-    import yaml
-
-    path = tmp_path / "pipeline.yaml"
-    path.write_text(yaml.safe_dump(PIPELINE, allow_unicode=True), encoding="utf-8")
+def test_config_is_loaded_from_yaml(tmp_path: Path):
+    """설정 형식은 YAML 하나다. `pipeline_id`는 전략에서 유도된다."""
+    path = tmp_path / "config.yml"
+    path.write_text(CONFIG, encoding="utf-8")
     # 전략은 설정 파일 **옆**에서 찾는다. 설정만 옮기면 전략을 못 찾는 것이 정상이다.
     shutil.copy(SAMPLE_DIR / "demo_momentum.py", tmp_path / "demo_momentum.py")
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'y.db').as_posix()}")
 
-    body = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
+    body = payload(invoke("run", "-c", str(path), "--now", NOW, "--json"))
 
-    assert body["pipeline_id"] == "pipe_test"
+    assert body["pipeline_id"] == "pipe_demo_momentum"
     assert body["signal_count"] > 0
     db.configure(get_settings().database_url)
 
@@ -410,14 +383,12 @@ def test_strategy_is_looked_up_next_to_the_pipeline_file(
     다루게 하는 규칙이다. 조용히 다른 디렉터리로 물러서면 **어느 파일이 돈
     전략인지** 알 수 없게 되고, 소스 해시를 기록하는 의미가 사라진다 (§4.7).
     """
-    import yaml
-
-    path = tmp_path / "pipeline.yaml"
-    path.write_text(yaml.safe_dump(PIPELINE, allow_unicode=True), encoding="utf-8")
+    path = tmp_path / "config.yml"
+    path.write_text(CONFIG, encoding="utf-8")
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'n.db').as_posix()}")
 
-    body = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
-    node = next(n for n in body["nodes"] if n["node_id"] == "strategy")
+    body = payload(invoke("run", "-c", str(path), "--now", NOW, "--json"))
+    node = next(n for n in body["nodes"] if n["node_id"] == "load")
 
     assert body["signal_count"] == 0
     assert "전략을 찾을 수 없습니다" in str(node.get("error"))
@@ -425,8 +396,8 @@ def test_strategy_is_looked_up_next_to_the_pipeline_file(
     db.configure(get_settings().database_url)
 
 
-def test_json_pipelines_still_load(workspace: Path):
-    """저장 스냅샷이 JSON이므로 로더는 계속 JSON을 읽는다."""
+def test_config_runs_without_an_explicit_path(workspace: Path):
+    """`~/.marketscan/config.yml`이 기본값이라 인자 없이 돈다."""
     assert invoke("run", "--now", NOW, "--json").exit_code == 0
 
 
@@ -434,7 +405,7 @@ def test_unknown_pipeline_format_exits_three(tmp_path: Path):
     path = tmp_path / "pipeline.toml"
     path.write_text("nope = true", encoding="utf-8")
 
-    result = invoke("run", "-p", str(path))
+    result = invoke("run", "-c", str(path))
     assert result.exit_code == 3
 
 
@@ -442,7 +413,7 @@ def test_empty_yaml_gives_an_actionable_error(tmp_path: Path):
     path = tmp_path / "pipeline.yaml"
     path.write_text("# 주석만 있는 파일\n", encoding="utf-8")
 
-    result = invoke("run", "-p", str(path))
+    result = invoke("run", "-c", str(path))
     assert result.exit_code == 3
 
 
@@ -493,29 +464,32 @@ def test_ingest_without_commit_writes_nothing(workspace: Path):
     """계획만 보여 준다. 소스도 캐시도 건드리지 않는다 (규칙 11)."""
     body = payload(invoke("ingest", "--now", NOW, "--json"))
     assert body["committed"] is False
-    assert body["planned"] == 3
-    assert body["uncached"] == 3  # 아직 아무것도 안 쌓였다
+    assert body["planned"] == 6
+    assert body["uncached"] == 6  # 아직 아무것도 안 쌓였다
     assert not (workspace / "test.db").exists()
 
 
 def test_ingest_commit_fills_the_cache(workspace: Path):
     body = payload(invoke("ingest", "--now", NOW, "--commit", "--json"))
     assert body["committed"] is True
-    assert body["fetched"] == 3
+    assert body["fetched"] == 6
     assert body["inserted"] > 0
     assert body["failures"] == []
     assert (workspace / "test.db").exists()
 
     # 두 번째 실행은 같은 봉을 다시 받지 않는다 — 무료 소스를 하루에 한 번만 밟는다.
     again = payload(invoke("ingest", "--now", NOW, "--commit", "--json"))
-    assert again["skipped_fresh"] == 3
+    assert again["skipped_fresh"] == 6
     assert again["fetched"] == 0
 
 
 def test_ingest_venue_filter(workspace: Path):
-    body = payload(invoke("ingest", "--now", NOW, "--venue", "krx", "--json"))
-    assert body["planned"] == 1
-    assert body["targets"][0]["instrument"] == "krx:005930"
+    body = payload(invoke("ingest", "--now", NOW, "--venue", "nasdaq", "--json"))
+    assert body["planned"] == 6
+    assert all(t["instrument"].startswith("nasdaq:") for t in body["targets"])
+
+    empty = payload(invoke("ingest", "--now", NOW, "--venue", "krx", "--json"))
+    assert empty["planned"] == 0
 
 
 def test_cache_only_run_needs_an_ingest_first(workspace: Path):
@@ -524,51 +498,28 @@ def test_cache_only_run_needs_an_ingest_first(workspace: Path):
     `cache: only`는 소스를 아예 부르지 않으므로, 수집 전과 후의 차이가 곧
     "캐시가 실제로 실행을 떠받쳤는가"의 증거다.
     """
-    pipeline = json.loads(json.dumps(PIPELINE))
-    pipeline["nodes"][0]["params"]["cache"] = "only"
-    path = workspace / "cache_only.json"
-    path.write_text(json.dumps(pipeline, ensure_ascii=False), encoding="utf-8")
+    invoke("ingest", "--now", NOW, "--commit")
 
-    before = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
-    assert before["ok"] is True  # 빈 결과는 실패가 아니다 (4.1)
-    assert before["signal_count"] == 0
+    body = payload(invoke("run", "--now", NOW, "--json"))
+    data = next(n for n in body["nodes"] if n["node_id"] == "data")
 
-    invoke("ingest", "-p", str(path), "--now", NOW, "--commit")
-    after = payload(invoke("run", "-p", str(path), "--now", NOW, "--json"))
-
-    assert after["signal_count"] > 0
-    assert next(n["items"] for n in after["nodes"] if n["node_id"] == "data") == 3
+    assert body["signal_count"] > 0
+    assert data["items"] == 6
 
 
-def test_market_filter_narrows_the_dynamic_universe(workspace: Path):
-    """★ `--market`이 동적 조회를 못 거르면 세 시장을 그대로 훑으면서 로그만 좁아진다."""
-    pipeline = json.loads(json.dumps(PIPELINE))
-    pipeline["nodes"].insert(
-        0,
-        {
-            "id": "universe",
-            "type": "symbolUniverse",
-            "params": {
-                "venues": [
-                    {"venue": "nasdaq", "top_by_turnover": 5},
-                    {"venue": "krx", "top_by_turnover": 5},
-                ]
-            },
-        },
+def test_market_filter_narrows_the_config_universe(workspace: Path):
+    """★ `--market`이 유니버스를 못 거르면 두 시장을 그대로 훑으면서 로그만 좁아진다."""
+    from app.config import AppConfig
+
+    config = AppConfig.model_validate(
+        {"strategy": "demo_momentum", "universe": {"nasdaq": 5, "krx": 5}}
     )
-    path = workspace / "mixed.json"
-    path.write_text(json.dumps(pipeline, ensure_ascii=False), encoding="utf-8")
 
-    from app.cli import pipeline_file
+    krx_only = config.for_market("krx")
+    assert krx_only.universe == {"krx": 5}
 
-    spec = pipeline_file.load(path)
-    filtered, dropped = pipeline_file.filter_by_market(spec, "krx")
-
-    universe = next(n for n in filtered.nodes if n.type == "symbolUniverse")
-    assert [q["venue"] for q in universe.params["venues"]] == ["krx"]
-    assert "venues[nasdaq]" in dropped
-    # 동적 조회가 남아 있으면 "종목 0개"로 보이더라도 빈 유니버스가 아니다
-    assert pipeline_file.has_empty_universe(filtered) is False
+    us_only = config.for_market("us")
+    assert us_only.universe == {"nasdaq": 5}
 
 
 # -------------------------------------------------------------------------- 백테스트
@@ -609,8 +560,8 @@ def test_backtest_rejects_an_inverted_range(workspace: Path):
     assert result.exit_code == 3
 
 
-def test_backtest_uses_the_pipeline_params(workspace: Path):
-    """설정 파일의 파라미터로 돈다 — 전략 기본값으로 돌면 다른 것을 검증하게 된다."""
+def test_backtest_uses_the_strategy_params(workspace: Path):
+    """파라미터의 정본이 전략 파일이므로 백테스트와 실행이 어긋날 수 없다."""
     body = payload(
         invoke(
             "backtest", "krx:005930",
@@ -618,4 +569,9 @@ def test_backtest_uses_the_pipeline_params(workspace: Path):
         )
     )
 
-    assert body["params"]["top_pct"] == 1.0  # PIPELINE이 준 값
+    # ★ 파라미터는 전략 파일이 정본이다 (4.8). 설정에서 값을 받지 않으므로
+    #   백테스트가 "지금 돌고 있는 것"과 어긋날 자리가 없다.
+    from app.strategies.registry import load_strategy
+
+    defaults = load_strategy("demo_momentum").strategy.Params().model_dump(mode="json")
+    assert body["params"] == defaults

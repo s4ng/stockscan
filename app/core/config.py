@@ -55,25 +55,24 @@ class Settings(BaseSettings):
 
     #: 사용자 전략 파일의 정본 위치. git으로 관리하고 소스 해시가 실행에 박힌다 (4.7).
     #:
-    #: **기본은 None이고, 그때는 실행 중인 파이프라인 파일과 같은 디렉터리에서 찾는다**
+    #: **기본은 None이고, 그때는 실행 중인 설정 파일과 같은 디렉터리에서 찾는다**
     #: (`strategies.registry.strategies_dir`). 설정과 전략을 함께 옮길 수 있어야
-    #: `-p sample/demo.yaml`이 저장소의 예제 전략을 그대로 집는다 — 설정만 옮기고
+    #: `-c sample/config.yml`이 저장소의 예제 전략을 그대로 집는다 — 설정만 옮기고
     #: 전략은 홈에 남으면 예제가 반쪽이 된다. 값을 주면 그쪽이 이긴다.
     strategies_dir: Path | None = None
 
-    #: 실행할 파이프라인 정의. 형식은 **YAML로 확정**됐다 (11장 4번, Phase 1에서 해소).
-    #: 로더가 확장자로 갈라 받으므로 기존 `.json` 파일도 그대로 읽힌다.
-    #: 상대 경로는 `config_dir` 기준이다 — 기본값은 `~/.marketscan/config.yml`.
-    pipeline_path: Path = Path("config.yml")
+    #: 설정 파일. 상대 경로는 `config_dir` 기준 — 기본값은 `~/.marketscan/config.yml`.
+    config_path: Path = Path("config.yml")
 
     #: 백테스트·실행 리포트 산출물. 서빙하지 않고 파일로 떨어뜨린다 (2.1).
     #: `config_dir` 기준 — 재생성 가능하지만 `--commit` 리포트는 실행 이력이라
     #: DB와 같은 곳에 있어야 함께 백업된다.
     reports_dir: Path = Path("reports")
 
-    #: 텔레그램 알림. **파이프라인 정의에 넣지 않는다** (규칙 7) — 설정 파일을
-    #: 그대로 복사·공유해도 비밀이 새지 않아야 한다. 둘 다 있어야 채널이 열리고,
-    #: 없으면 `serve`는 알림을 **기록만** 한다 (미구현을 성공처럼 보이게 하지 않는다).
+    #: 텔레그램 알림. **설정 파일의 `telegram:`을 덮어쓰는 경로다** (2026-08-06).
+    #: 값을 설정 파일에 두기로 했지만, 백업·공유 때 비워 두고 환경변수로 넘길 수
+    #: 있어야 한다. 둘 다 있어야 채널이 열리고, 없으면 `serve`는 알림을 **기록만**
+    #: 한다 (미구현을 성공처럼 보이게 하지 않는다).
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
 

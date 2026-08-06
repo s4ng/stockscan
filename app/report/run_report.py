@@ -25,7 +25,7 @@ from app.core.formatting import (
     format_time,
     timezone_label,
 )
-from app.engine.runner import RunResult
+from app.pipeline import RunResult
 
 #: 리포트에 실을 최대 신호 수. 넘으면 잘라내고 그 사실을 리포트에 적는다.
 MAX_ROWS = 200

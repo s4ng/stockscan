@@ -18,31 +18,17 @@ import pytest
 
 from app import service
 from app.alerts import LogChannel
-from app.schedule import Schedule, ScheduleEntry, ScheduleError
-from app.schemas.pipeline import PipelineSpec
+from app.config import AppConfig, ScheduleConfig
+from app.schedule import Schedule, ScheduleEntry
 from app.serve import Scheduler
+from tests.conftest import make_config
 
 KST = ZoneInfo("Asia/Seoul")
 
-SPEC = PipelineSpec.model_validate(
-    {
-        "pipeline_id": "pipe_sched",
-        "nodes": [
-            {
-                "id": "trigger",
-                "type": "scheduleTrigger",
-                "params": {
-                    "at": [
-                        {"time": "15:40", "market": "krx", "note": "KRX 마감 뒤"},
-                        {"time": "09:10", "market": "us"},
-                    ],
-                    "heartbeat": "09:00",
-                },
-            },
-        ],
-        "edges": [],
-        "settings": {"user_timezone": "Asia/Seoul"},
-    }
+#: ⚠️ 슬롯이 시장을 갖지 않는다 (2026-08-06). Fresh Bar Gate가 새로 마감된 봉이
+#: 없는 시장을 어차피 제외하므로 두 번 거를 이유가 없었다.
+CONFIG = make_config(
+    schedule=ScheduleConfig(at=[time(15, 40), time(9, 10)], heartbeat=time(9, 0))
 )
 
 
@@ -64,17 +50,17 @@ class FakeOutcome:
         self.committed = True
 
 
-def make_scheduler(*, written: int = 0, fail: bool = False, spec: PipelineSpec = SPEC):
+def make_scheduler(*, written: int = 0, fail: bool = False, config: AppConfig = CONFIG):
     calls: list[dict[str, Any]] = []
 
-    async def fake_run(loaded_spec, **kwargs):
+    async def fake_run(loaded_config, **kwargs):
         calls.append(kwargs)
         if fail:
             raise RuntimeError("소스가 죽었습니다")
         return FakeOutcome(written)
 
     channel = LogChannel()
-    scheduler = Scheduler(channel, load_spec=lambda: spec, run=fake_run)
+    scheduler = Scheduler(channel, load_config=lambda: config, run=fake_run)
     return scheduler, channel, calls
 
 
@@ -86,7 +72,7 @@ def _no_report(monkeypatch: pytest.MonkeyPatch):
 
 # ------------------------------------------------------------------- 스케줄 계산
 def test_next_fire_picks_the_closest_upcoming_slot():
-    schedule = Schedule.from_spec(SPEC)
+    schedule = Schedule.from_config(CONFIG)
     now = datetime(2026, 8, 4, 3, 0, tzinfo=UTC)  # 12:00 KST
 
     moment, entry = schedule.next_fire(now)
@@ -96,7 +82,7 @@ def test_next_fire_picks_the_closest_upcoming_slot():
 
 
 def test_next_fire_rolls_over_to_tomorrow_after_the_last_slot():
-    schedule = Schedule.from_spec(SPEC)
+    schedule = Schedule.from_config(CONFIG)
     now = datetime(2026, 8, 4, 9, 0, tzinfo=UTC)  # 18:00 KST — 오늘 슬롯은 끝났다
 
     moment, entry = schedule.next_fire(now)
@@ -126,10 +112,10 @@ def test_schedule_survives_dst_by_rebuilding_each_day():
     assert first.hour != second.hour  # UTC로는 옮겨졌다
 
 
-def test_empty_schedule_is_refused_loudly():
-    """조용히 넘어가면 하루 종일 아무것도 안 돈다."""
-    with pytest.raises(ScheduleError):
-        Schedule.from_params({"at": []}, default_timezone="Asia/Seoul")
+def test_empty_schedule_yields_nothing_to_run():
+    """시각이 하나도 없으면 스케줄이 없다. `serve`가 시작할 때 그 사실을 알린다."""
+    empty = make_config(schedule=ScheduleConfig(at=[], heartbeat=None))
+    assert Schedule.from_config(empty) is None
 
 
 # ----------------------------------------------------------------------- 발화
@@ -161,7 +147,7 @@ async def test_starting_late_does_not_replay_the_days_slots():
     await scheduler.tick(evening.replace(minute=1))
 
     assert calls == []
-    assert scheduler.state.skipped_on_start == ["15:40 [krx]", "09:10 [us]"]
+    assert scheduler.state.skipped_on_start == ["09:10", "15:40"]
 
 
 @pytest.mark.asyncio
@@ -250,10 +236,10 @@ async def test_heartbeat_is_sent_once_a_day():
 # ------------------------------------------------------------------------ 상태
 @pytest.mark.asyncio
 async def test_broken_config_is_reported_but_does_not_crash():
-    def broken() -> PipelineSpec:
+    def broken() -> AppConfig:
         raise ValueError("설정 파일이 깨졌습니다")
 
-    scheduler = Scheduler(LogChannel(), load_spec=broken)
+    scheduler = Scheduler(LogChannel(), load_config=broken)
 
     await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
 
@@ -261,16 +247,11 @@ async def test_broken_config_is_reported_but_does_not_crash():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_without_a_schedule_says_so():
-    spec = PipelineSpec.model_validate(
-        {
-            "pipeline_id": "pipe_manual",
-            "nodes": [{"id": "t", "type": "manualTrigger", "params": {}}],
-            "edges": [],
-        }
-    )
-    scheduler = Scheduler(LogChannel(), load_spec=lambda: spec)
+async def test_a_config_without_a_schedule_says_so():
+    """조용히 넘어가면 하루 종일 아무것도 안 돈다."""
+    empty = make_config(schedule=ScheduleConfig(at=[], heartbeat=None))
+    scheduler = Scheduler(LogChannel(), load_config=lambda: empty)
 
     await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
 
-    assert "scheduleTrigger" in scheduler.state.error
+    assert "schedule.at" in scheduler.state.error

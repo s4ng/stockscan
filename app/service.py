@@ -1,8 +1,7 @@
-"""실행 서비스 — 명령의 **본체**. CLI도 웹 UI도 여기를 통해서만 실행한다.
+"""실행 서비스 — 명령의 **본체**. CLI도 스케줄러도 여기를 통해서만 실행한다.
 
 CLAUDE.md가 정한 것: **"`run --commit`을 무엇이 부르든 동작이 같아야 한다."**
-부르는 창구가 둘(터미널·브라우저)이 되면서 이 문장이 실제로 시험대에 올랐다.
-오케스트레이션을 양쪽에 각각 적으면 언젠가 한쪽만 바뀌고, 그날 **화면에서 누른
+오케스트레이션을 양쪽에 각각 적으면 언젠가 한쪽만 바뀌고, 그날 **스케줄이 돌린
 실행과 터미널에서 친 실행이 다른 일을 한다.** `strategies/stages.py`가 전략 단계
 순서에 대해 하는 일을 이 모듈이 명령 전체에 대해 한다.
 
@@ -21,20 +20,19 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.backtest import ReplayResult, replay
-from app.cli import pipeline_file
-from app.engine.context import RunContext
-from app.engine.runner import RunResult, execute
+from app.config import AppConfig
+from app.engine.context import ExecutionMode, RunContext, RunSettings
 from app.engine.signals import CollectingSink
 from app.engine.state import InMemoryBarState
 from app.ingest import worker
 from app.market.instrument import InstrumentRef
+from app.pipeline import RunResult, execute
 from app.providers.ohlcv_source import CachedSource, DirectSource
 from app.providers.universe_source import CachedUniverse, DirectUniverse
 from app.report.backtest_report import report_path as backtest_report_path
 from app.report.backtest_report import write_backtest_report
 from app.report.run_report import ReportInput, report_path, write_run_report
-from app.schemas.pipeline import ExecutionMode, PipelineSpec
-from app.storage import db, history, instruments
+from app.storage import db, history, instruments, repository
 from app.storage.bar_state import SqlBarState, sqlite_path
 from app.storage.history import SqlSignalSink
 from app.strategies.registry import StrategyError, load_strategy
@@ -64,7 +62,7 @@ class ServiceError(RuntimeError):
 
 
 # ===================================================================== 실행 자원
-def ohlcv_source(providers: Any, spec: PipelineSpec) -> Any:
+def ohlcv_source(providers: Any, settings: RunSettings) -> Any:
     """봉을 어디서 얻을지 고른다 (3.9).
 
     ★ **dry-run도 캐시에 쓴다.** 규칙 11이 막는 것은 **되돌릴 수 없는 것** 셋이다 —
@@ -74,20 +72,20 @@ def ohlcv_source(providers: Any, spec: PipelineSpec) -> Any:
     존재 이유다.
     """
     if sqlite_path(db.database_url()) is None:
-        return DirectSource(providers, default_adjusted=spec.settings.adjusted)
+        return DirectSource(providers, default_adjusted=settings.adjusted)
     return CachedSource(
         providers,
         db.get_sessionmaker(),
         writable=True,
-        default_adjusted=spec.settings.adjusted,
+        default_adjusted=settings.adjusted,
     )
 
 
 def universe_source(providers: Any, now: datetime) -> Any:
     """종목 목록을 어디서 얻을지 고른다 (4.7).
 
-    캐시가 아끼는 것은 **거래대금이 없는 목록**뿐이다 — `top_by_turnover`를 거는
-    venue는 노드가 `needs_turnover=True`로 불러 캐시를 건너뛴다.
+    캐시가 아끼는 것은 **거래대금이 없는 목록**뿐이다 — 거래대금으로 자르는
+    venue는 파이프라인이 `needs_turnover=True`로 불러 캐시를 건너뛴다.
     """
     if sqlite_path(db.database_url()) is None:
         return DirectUniverse(providers)
@@ -142,7 +140,7 @@ class RunOutcome:
 
 
 async def execute_run(
-    spec: PipelineSpec,
+    config: AppConfig,
     *,
     mode: ExecutionMode | None = None,
     now: datetime | None = None,
@@ -152,11 +150,11 @@ async def execute_run(
 ) -> RunOutcome:
     """파이프라인을 실행한다. **부작용은 `commit`이 있을 때만** 열린다 (규칙 11).
 
-    ⚠️ `allow_alerts`는 **스케줄 실행만** 켠다. 사람이 손으로(터미널이든 화면의
-    버튼이든) 부른 실행에서 채널로 메시지가 나가면 알림 자체를 믿지 않게 된다
-    (12.2). 기본값이 False인 이유이고, 웹 UI도 이 기본값을 그대로 쓴다.
+    ⚠️ `allow_alerts`는 **스케줄 실행만** 켠다. 사람이 손으로 부른 실행에서 채널로
+    메시지가 나가면 알림 자체를 믿지 않게 된다 (12.2). 기본값이 False인 이유다.
     """
-    resolved_mode = mode or spec.settings.default_mode
+    settings = run_settings(config)
+    resolved_mode = mode or settings.default_mode
 
     sink: Any = CollectingSink()
     # 캐시 쓰기는 dry-run에서도 열려 있으므로(`ohlcv_source`) 테이블을 먼저 만든다.
@@ -165,35 +163,42 @@ async def execute_run(
         sink = SqlSignalSink(db.get_sessionmaker())
 
     ctx = RunContext.create(
-        settings=spec.settings,
+        settings=settings,
         mode=resolved_mode,
         now=now,
-        pipeline_id=spec.pipeline_id,
-        bar_state=bar_state(spec.pipeline_id, commit, warn),
+        pipeline_id=config.pipeline_id,
+        bar_state=bar_state(config.pipeline_id, commit, warn),
         signals=sink,
         commit=commit,
         allow_alerts=allow_alerts,
     )
     # 레지스트리는 RunContext가 만든 것을 그대로 쓴다 — 소스 구성의 단일 출처가
     # 한 곳이어야 테스트가 네트워크를 막을 수 있다 (tests/conftest.py).
-    ctx.ohlcv = ohlcv_source(ctx.providers, spec)
+    ctx.ohlcv = ohlcv_source(ctx.providers, settings)
     ctx.universe = universe_source(ctx.providers, ctx.now)
 
     if commit:
         async with db.session_scope() as session:
+            # ★ 설정 스냅샷을 먼저 남긴다 (규칙 10). 내용이 같으면 버전을 올리지
+            #   않으므로 매 실행마다 쌓이지 않는다.
+            _, version = await repository.save_config(session, config)
             await history.start_run(
-                session, run_id=ctx.run_id, spec=spec, mode=str(resolved_mode), as_of=ctx.now
+                session,
+                run_id=ctx.run_id,
+                pipeline_id=config.pipeline_id,
+                version=version,
+                mode=str(resolved_mode),
+                as_of=ctx.now,
             )
-            await snapshot_strategies(session, spec)
+            await snapshot_strategies(session, config)
 
     try:
-        result = await execute(spec, ctx)
-        # 노드별 스냅샷이 있어야 `explain`이 "왜 이 신호가 났는가"를 돌려준다 (4.9).
+        result = await execute(config, ctx)
+        # 단계별 스냅샷이 있어야 `explain`이 "왜 이 신호가 났는가"를 돌려준다 (4.9).
         if commit:
             async with db.session_scope() as session:
                 await history.finish_run(session, result)
     finally:
-        # CCXT가 연 aiohttp 세션을 닫는다. 남기면 종료 시 경고가 뜬다.
         await ctx.providers.close()
         closer = getattr(ctx.bar_state, "close", None)
         if closer is not None:
@@ -212,17 +217,22 @@ async def execute_run(
     )
 
 
-async def snapshot_strategies(session: Any, spec: PipelineSpec) -> None:
+def run_settings(config: AppConfig) -> RunSettings:
+    """설정에서 실행 전역 값을 만든다. 사람이 정하는 것은 타임존 하나다."""
+    return RunSettings(user_timezone=config.timezone)
+
+
+async def snapshot_strategies(session: Any, config: AppConfig) -> None:
     """전략 소스 전문을 해시 기준으로 보관한다 (4.7).
 
     파일을 고치면 과거 실행의 근거가 소급으로 바뀌므로, 커밋 실행마다 그 시점의
     코드를 남긴다. 이미 있는 해시면 아무 일도 하지 않는다.
     """
-    for strategy_id in pipeline_file.strategy_ids(spec):
+    for strategy_id in filter(None, [config.strategy]):
         try:
             loaded = load_strategy(strategy_id)
         except StrategyError:
-            continue  # 실행 단계에서 노드가 제대로 된 오류를 낸다
+            continue  # 실행 단계에서 제대로 된 오류를 낸다
         await history.snapshot_strategy(
             session,
             strategy_id=strategy_id,
@@ -231,7 +241,7 @@ async def snapshot_strategies(session: Any, spec: PipelineSpec) -> None:
         )
 
 
-def write_report(outcome: RunOutcome, spec: PipelineSpec, warn: Notify = _silent) -> Path | None:
+def write_report(outcome: RunOutcome, config: AppConfig, warn: Notify = _silent) -> Path | None:
     """정적 HTML 리포트를 남긴다.
 
     파일 쓰기지만 `--commit` 뒤에 두지 않았다. 재생성 가능하고 무엇도 되돌릴 수
@@ -244,8 +254,8 @@ def write_report(outcome: RunOutcome, spec: PipelineSpec, warn: Notify = _silent
                 result=outcome.result,
                 signals=outcome.signals,
                 committed=outcome.committed,
-                pipeline_name=spec.name,
-                user_timezone=spec.settings.user_timezone,
+                pipeline_name=config.strategy,
+                user_timezone=config.timezone,
             ),
             report_path(outcome.result.run_id, committed=outcome.committed),
         )
@@ -256,7 +266,7 @@ def write_report(outcome: RunOutcome, spec: PipelineSpec, warn: Notify = _silent
 
 # ======================================================================= backtest
 async def execute_backtest(
-    spec: PipelineSpec,
+    config: AppConfig,
     *,
     instrument: str,
     start: date,
@@ -269,16 +279,18 @@ async def execute_backtest(
     if end < start:
         raise ServiceError(f"종료일({end})이 시작일({start})보다 빠릅니다.")
 
-    chosen, raw_params = backtest_strategy(spec, strategy_id, warn)
+    chosen = strategy_id or config.strategy
+    if not chosen:
+        raise ServiceError("설정에 strategy가 없습니다. --strategy로 직접 지정하세요.")
     try:
         loaded = load_strategy(chosen)
-        params = loaded.strategy.Params.model_validate(raw_params)
     except StrategyError as exc:
         raise ServiceError(str(exc)) from exc
-    except ValueError as exc:
-        raise ServiceError(f"[{chosen}] 전략 파라미터 오류 — {exc}") from exc
 
     strategy = loaded.strategy
+    # ★ 파라미터는 전략 파일이 정본이다 (4.8). 설정에서 값을 받지 않으므로
+    #   백테스트가 "지금 돌고 있는 것"과 어긋날 자리가 없어졌다.
+    params = strategy.Params()
     await db.init_db()
 
     # 기준 시각은 종료일의 끝이되 미래로는 가지 않는다. `ctx.now`가 미래면
@@ -286,17 +298,18 @@ async def execute_backtest(
     end_of_day = datetime.combine(end, time(23, 59, 59), tzinfo=UTC)
     now = min(end_of_day, datetime.now(UTC))
 
+    settings = run_settings(config)
     ctx = RunContext.create(
-        settings=spec.settings,
+        settings=settings,
         mode=ExecutionMode.BACKTEST,  # signals·알림을 구조적으로 막는다 (4.2)
         now=now,
-        pipeline_id=spec.pipeline_id,
+        pipeline_id=config.pipeline_id,
     )
-    ctx.ohlcv = ohlcv_source(ctx.providers, spec)
+    ctx.ohlcv = ohlcv_source(ctx.providers, settings)
     ctx.universe = universe_source(ctx.providers, ctx.now)
 
     try:
-        ref = await resolve_instrument(instrument, ctx, spec, warn=warn, progress=progress)
+        ref = await resolve_instrument(instrument, ctx, config, warn=warn, progress=progress)
         # 워밍업 + 리플레이 구간. 달력일이 거래일보다 많으므로 넉넉한 쪽으로 잡힌다.
         bars = strategy.startup_candles + (end - start).days + 10
         progress(f"{ref.key} · {strategy.timeframe} · 최대 {bars}봉을 읽습니다…")
@@ -326,55 +339,22 @@ async def execute_backtest(
         await db.dispose()
 
 
-def write_backtest(result: ReplayResult, spec: PipelineSpec, warn: Notify = _silent) -> Path | None:
+def write_backtest(result: ReplayResult, config: AppConfig, warn: Notify = _silent) -> Path | None:
     try:
         return write_backtest_report(
             result,
             backtest_report_path(result),
-            user_timezone=spec.settings.user_timezone,
+            user_timezone=config.timezone,
         )
     except OSError as exc:
         warn(f"리포트를 쓰지 못했습니다 ({exc}). 결과 자체는 유효합니다.")
         return None
 
 
-def backtest_strategy(
-    spec: PipelineSpec, override: str | None, warn: Notify = _silent
-) -> tuple[str, dict[str, Any]]:
-    """어떤 전략을 어떤 파라미터로 돌릴 것인가.
-
-    기본은 **설정 파일의 전략과 그 파라미터**다. 파이프라인에 적어 둔 값으로
-    돌아야 백테스트가 "지금 돌고 있는 것"을 재현한다 — 전략 기본값으로 돌리면
-    실제로 도는 설정과 다른 것을 검증하게 된다.
-    """
-    nodes = [n for n in spec.nodes if n.type == "strategyRunner"]
-    if override:
-        for node in nodes:
-            if node.params.get("strategy_id") == override:
-                return override, dict(node.params.get("params") or {})
-        warn(
-            f"{override}는 이 설정 파일에 없어 전략의 기본 파라미터로 돌립니다 "
-            f"(설정의 전략: {', '.join(pipeline_file.strategy_ids(spec)) or '(없음)'})."
-        )
-        return override, {}
-
-    if not nodes:
-        raise ServiceError(
-            "설정 파일에 strategyRunner 노드가 없습니다. 전략을 직접 지정하세요."
-        )
-    first = nodes[0]
-    if len(nodes) > 1:
-        warn(
-            f"전략이 여럿이라 첫 번째({first.params.get('strategy_id')})로 돌립니다. "
-            f"전략을 직접 고를 수 있습니다."
-        )
-    return str(first.params.get("strategy_id") or ""), dict(first.params.get("params") or {})
-
-
 async def resolve_instrument(
     raw: str,
     ctx: RunContext,
-    spec: PipelineSpec,
+    config: AppConfig,
     *,
     warn: Notify = _silent,
     progress: Notify = _silent,
@@ -383,9 +363,9 @@ async def resolve_instrument(
 
     찾는 순서는 싼 것부터다: 심볼 마스터(DB) → 소스에 직접 조회.
 
-    ★ **소스 조회까지 가는 이유** — 마스터에는 `top_by_turnover`를 쓰는 venue가
-    없다. 거래대금은 캐시하면 그날의 유니버스가 바뀌므로 통째로 건너뛰기 때문이고
-    (`instruments.py`), 그 결과 국내·코인은 마스터에 한 줄도 없다. 여기서 멈추면
+    ★ **소스 조회까지 가는 이유** — 마스터에는 거래대금으로 자르는 venue가 없다.
+    거래대금은 캐시하면 그날의 유니버스가 바뀌므로 통째로 건너뛰기 때문이고
+    (`instruments.py`), 그 결과 KRX는 마스터에 한 줄도 없다. 여기서 멈추면
     `backtest 삼성전자`가 **"그런 종목이 없다"로 끝난다** — 있는데도.
     """
     text = raw.strip()
@@ -401,7 +381,7 @@ async def resolve_instrument(
             found = await instruments.find(session, text)
 
     if not found:
-        found = await _search_venues(text, ctx, spec, warn=warn, progress=progress)
+        found = await _search_venues(text, ctx, config, warn=warn, progress=progress)
 
     if not found:
         raise ServiceError(
@@ -417,20 +397,15 @@ async def resolve_instrument(
 
 
 async def _search_venues(
-    text: str, ctx: RunContext, spec: PipelineSpec, *, warn: Notify, progress: Notify
+    text: str, ctx: RunContext, config: AppConfig, *, warn: Notify, progress: Notify
 ) -> list[InstrumentRef]:
     """설정 파일이 훑는 venue의 종목 목록에서 이름·심볼을 찾는다.
 
     **훑는 venue만 본다.** 안 보는 시장까지 뒤지면 이름 하나 찾자고 네트워크
     호출이 셋으로 늘고, 사용자가 관심 없는 시장의 동명이의 종목이 후보로 끼어든다.
     """
-    venues = [
-        str(q["venue"])
-        for q in pipeline_file.universe_summary(spec)["dynamic"]  # type: ignore[union-attr]
-        if q.get("venue")
-    ]
     matches: list[InstrumentRef] = []
-    for venue in dict.fromkeys(venues):
+    for venue in config.universe:
         progress(f"{venue}의 종목 목록에서 {text!r}를 찾는 중…")
         try:
             result = await ctx.universe.list_instruments(venue)
@@ -461,7 +436,7 @@ class IngestOutcome:
 
 
 async def execute_ingest(
-    spec: PipelineSpec,
+    config: AppConfig,
     *,
     venue: str | None = None,
     lookback: int | None = None,
@@ -472,15 +447,15 @@ async def execute_ingest(
 ) -> IngestOutcome:
     """수집 계획을 세우고, `commit`이면 실제로 받아 캐시에 쌓는다 (3.9)."""
     ctx = RunContext.create(
-        settings=spec.settings,
+        settings=run_settings(config),
         mode=ExecutionMode.NOTIFY,
         now=now,
-        pipeline_id=spec.pipeline_id,
+        pipeline_id=config.pipeline_id,
         commit=commit,
     )
     try:
         plan = await worker.plan_targets(
-            spec, ctx, lookback=lookback, include_delisted=include_delisted
+            config, ctx, lookback=lookback, include_delisted=include_delisted
         )
         plan = plan.filtered(venue)
 

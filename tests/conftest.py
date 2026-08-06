@@ -1,19 +1,19 @@
 """테스트 전역 격리.
 
-**테스트는 네트워크를 타지 않는다.** Phase 1에서 기본 라우팅이 코인 → CCXT
-실물 시세로 바뀌었으므로(`DEFAULT_ROUTES`), 격리하지 않으면 엔진 테스트가
-거래소를 두드린다. 거래소가 느리거나 죽은 날 테스트가 빨개지면 그 신호는
-쓸모가 없다 — 우리가 검증하려는 것은 엔진이지 업비트의 가동률이 아니다.
-
-CCXT 어댑터 자체는 `test_providers_ccxt.py`가 가짜 거래소로 검증한다.
+**테스트는 네트워크를 타지 않는다.** 기본 라우팅(`DEFAULT_ROUTES`)이 실물 소스를
+가리키므로, 격리하지 않으면 파이프라인 테스트가 pykrx·yfinance를 두드린다. 소스가
+느리거나 죽은 날 테스트가 빨개지면 그 신호는 쓸모가 없다 — 우리가 검증하려는 것은
+이 프로그램이지 무료 API의 가동률이 아니다.
 """
 
 from __future__ import annotations
 
+from datetime import time
 from pathlib import Path
 
 import pytest
 
+from app.config import AppConfig, ScheduleConfig
 from app.core.config import SAMPLE_DIR, get_settings
 from app.providers.registry import ProviderRegistry
 from app.providers.synthetic import SyntheticProvider
@@ -24,6 +24,23 @@ def synthetic_registry() -> ProviderRegistry:
     registry = ProviderRegistry()
     registry.register(SyntheticProvider())
     return registry
+
+
+def make_config(**overrides) -> AppConfig:
+    """테스트용 설정 한 벌. 예제 전략(`sample/`)을 그대로 쓴다."""
+    base = {
+        "timezone": "Asia/Seoul",
+        "universe": {"nasdaq": 5},
+        "strategy": "demo_momentum",
+        "schedule": ScheduleConfig(at=[time(15, 40)], heartbeat=time(9, 0)),
+    }
+    base.update(overrides)
+    return AppConfig.model_validate(base)
+
+
+@pytest.fixture
+def config() -> AppConfig:
+    return make_config()
 
 
 @pytest.fixture(autouse=True)
@@ -41,10 +58,9 @@ def isolated_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     전략 목록은 그 사람이 뭘 갖고 있느냐에 따라 달라진다.
 
     전략 탐색은 `sample/`을 보게 둔다. **`strategies_dir`(명시 설정)이 아니라
-    `_pipeline_dir`(활성 파이프라인)로 넣는 것이 중요하다** — 명시 설정은 모든
-    것을 이기므로, 그걸 깔아 두면 "전략은 파이프라인 파일 옆에서 찾는다"는 규칙
-    자체가 테스트에서 영영 실행되지 않는다. 파이프라인을 읽는 테스트는 실제
-    동작대로 이 값을 덮어쓴다.
+    `_config_dir`(활성 설정 파일)로 넣는 것이 중요하다** — 명시 설정은 모든 것을
+    이기므로, 그걸 깔아 두면 "전략은 설정 파일 옆에서 찾는다"는 규칙 자체가
+    테스트에서 영영 실행되지 않는다.
     """
     monkeypatch.setattr(get_settings(), "config_dir", tmp_path / "config_home")
-    monkeypatch.setattr(strategy_registry, "_pipeline_dir", SAMPLE_DIR)
+    monkeypatch.setattr(strategy_registry, "_config_dir", SAMPLE_DIR)

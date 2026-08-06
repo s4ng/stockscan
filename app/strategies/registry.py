@@ -56,30 +56,30 @@ class LoadedStrategy:
         return self.source.sha256
 
 
-#: 지금 실행 중인 파이프라인 파일이 놓인 디렉터리. `pipeline_file.load()`가 채운다.
+#: 지금 실행 중인 설정 파일이 놓인 디렉터리. `pipeline_file.load()`가 채운다.
 #:
 #: 전략을 **자기를 부르는 설정 파일 옆**에서 찾게 하려는 것이다. 설정 하나와 그것이
 #: 부르는 전략들이 한 디렉터리에 모여 있어야 통째로 복사·백업할 수 있다.
-_pipeline_dir: Path | None = None
+_config_dir: Path | None = None
 
 
-def bind_pipeline_dir(path: Path | None) -> None:
-    """전략 탐색의 기준을 이 파이프라인 파일이 있는 디렉터리로 옮긴다."""
-    global _pipeline_dir
-    _pipeline_dir = Path(path).expanduser().resolve().parent if path is not None else None
+def bind_config_dir(path: Path | None) -> None:
+    """전략 탐색의 기준을 이 설정 파일이 있는 디렉터리로 옮긴다."""
+    global _config_dir
+    _config_dir = Path(path).expanduser().resolve().parent if path is not None else None
 
 
 def strategies_dir() -> Path:
     """전략을 찾을 디렉터리.
 
-    우선순위: 명시 설정(`MARKETSCAN_STRATEGIES_DIR`) → 활성 파이프라인 파일의
+    우선순위: 명시 설정(`MARKETSCAN_STRATEGIES_DIR`) → 활성 설정 파일의
     디렉터리 → `config_dir`. 마지막 단이 있어야 파이프라인을 아직 읽지 않은
     명령(`strategy new` 등)도 갈 곳이 있다.
     """
     settings = get_settings()
     if settings.strategies_dir is not None:
         return settings.resolve(settings.strategies_dir)
-    return _pipeline_dir or Path(settings.config_dir).expanduser()
+    return _config_dir or Path(settings.config_dir).expanduser()
 
 
 def source_hash(path: Path) -> str:

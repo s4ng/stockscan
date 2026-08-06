@@ -16,10 +16,10 @@ from typer.testing import CliRunner
 
 from app.cli import main as cli_main
 from app.core.config import SAMPLE_DIR, get_settings
-from app.engine.runner import NodeRunRecord, NodeStatus, RunResult, RunStatus
+from app.pipeline import RunResult, RunStatus, StageRecord, StageStatus
 from app.report.run_report import ReportInput, report_path, write_run_report
 from app.storage import db
-from tests.test_cli import PIPELINE
+from tests.test_cli import CONFIG
 
 runner = CliRunner()
 NOW = "2026-03-10T12:00:00Z"
@@ -33,10 +33,10 @@ def make_result(status: RunStatus = RunStatus.SUCCESS) -> RunResult:
         now=NOW,
         status=status,
         nodes=[
-            NodeRunRecord(
+            StageRecord(
                 node_id="data",
                 type="marketData",
-                status=NodeStatus.SUCCESS,
+                status=StageStatus.SUCCESS,
                 duration_ms=12.3,
                 logs=["[info] 3개 종목 수집 완료 (1d)"],
             )
@@ -114,10 +114,10 @@ def test_zero_signals_reads_as_normal_not_broken(tmp_path: Path):
 def test_failed_nodes_are_surfaced(tmp_path: Path):
     result = make_result(RunStatus.PARTIAL)
     result.nodes.append(
-        NodeRunRecord(
+        StageRecord(
             node_id="strategy",
             type="strategyRunner",
-            status=NodeStatus.ERROR,
+            status=StageStatus.ERROR,
             error="전략을 찾을 수 없습니다",
         )
     )
@@ -131,11 +131,11 @@ def test_failed_nodes_are_surfaced(tmp_path: Path):
 # ---------------------------------------------------------------------- CLI 연동
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    pipeline_path = tmp_path / "pipeline.json"
-    pipeline_path.write_text(json.dumps(PIPELINE, ensure_ascii=False), encoding="utf-8")
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(CONFIG, encoding="utf-8")
 
     settings = get_settings()
-    monkeypatch.setattr(settings, "pipeline_path", pipeline_path)
+    monkeypatch.setattr(settings, "config_path", config_path)
     monkeypatch.setattr(settings, "strategies_dir", SAMPLE_DIR)
     monkeypatch.setattr(settings, "reports_dir", tmp_path / "reports")
     db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}")
