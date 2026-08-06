@@ -108,7 +108,7 @@ class DirectSource:
         if policy == "only":
             raise CacheMissError(
                 f"{instrument.key}: cache=only인데 캐시가 없습니다. "
-                f"`marketscan ingest --commit`으로 먼저 봉을 쌓으세요."
+                f"`stockscan ingest --commit`으로 먼저 봉을 쌓으세요."
             )
         result = await self.registry.fetch_ohlcv(instrument, timeframe, end, limit, source=source)
         return LoadResult(
@@ -159,7 +159,7 @@ class CachedSource:
             raise CacheMissError(
                 f"{instrument.key} · {timeframe}: 캐시가 요청 구간({limit}봉, "
                 f"~{end.isoformat()})을 채우지 못했습니다. "
-                f"`marketscan ingest --commit --lookback {limit}`으로 먼저 쌓으세요."
+                f"`stockscan ingest --commit --lookback {limit}`으로 먼저 쌓으세요."
             )
 
         result = await self.registry.fetch_ohlcv(instrument, timeframe, end, limit, source=source)
@@ -247,7 +247,7 @@ class CachedSource:
         if len(df) < limit:
             notes.append(
                 f"{instrument.key}: 캐시가 {len(df)}봉만 가지고 있습니다(요청 {limit}). "
-                f"`marketscan ingest --commit --lookback {limit}`으로 더 쌓으세요."
+                f"`stockscan ingest --commit --lookback {limit}`으로 더 쌓으세요."
             )
         return LoadResult(
             df=df,

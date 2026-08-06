@@ -1,7 +1,7 @@
 """Fresh Bar Gate의 영속 저장소 (ARCHITECTURE.md 3.5).
 
 `InMemoryBarState`는 프로세스 메모리에만 남아서, **CLI에서는 Fresh Bar Gate가
-사실상 동작하지 않았다** — `marketscan run`은 매번 새 프로세스라 `last_seen`이
+사실상 동작하지 않았다** — `stockscan run`은 매번 새 프로세스라 `last_seen`이
 항상 비어 있다. v0.4(상주 서버)에서는 프로세스가 살아 있어 그럭저럭 돌았지만
 v0.5의 CLI 전환이 이 구멍을 드러냈다. 여기가 그 구멍을 막는다.
 
@@ -111,7 +111,7 @@ class SqlBarState:
 
 
 def sqlite_path(url: str) -> Path | None:
-    """`sqlite+aiosqlite:///./data/marketscan.db` → `./data/marketscan.db`.
+    """`sqlite+aiosqlite:///./data/stockscan.db` → `./data/stockscan.db`.
 
     SQLite가 아니거나 인메모리면 None. 그 경우 호출자가 인메모리 저장소로 물러선다.
     """

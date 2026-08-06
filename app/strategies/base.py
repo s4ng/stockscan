@@ -48,7 +48,7 @@ class EmptyParams(BaseModel):
 
 
 class Strategy(ABC):
-    """전략 1개. 설정 파일 옆(`~/.marketscan/<id>.py`)에 이 클래스의 구현체를 하나만 둔다."""
+    """전략 1개. 설정 파일 옆(`~/.stockscan/<id>.py`)에 이 클래스의 구현체를 하나만 둔다."""
 
     #: 파일 이름(확장자 제외)과 반드시 같아야 한다. 로더가 강제한다.
     id: ClassVar[str]
@@ -78,7 +78,7 @@ class Strategy(ABC):
         **인과적이어야 한다.** `rolling` · `ewm` · `shift(양수)`는 안전하고,
         `shift(음수)` · `center=True` · `bfill`은 미래를 본다. 후자가 하나라도
         섞이면 4.8의 피처 행렬 사전 계산이 통째로 무너진다.
-        `marketscan strategy check`가 AST로 상당 부분 잡지만 통과가 보장은 아니다.
+        `stockscan strategy check`가 AST로 상당 부분 잡지만 통과가 보장은 아니다.
         """
 
     # ------------------------------------------------------------------ 횡단면
@@ -100,7 +100,7 @@ class Strategy(ABC):
     # ------------------------------------------------------------------ 부가정보
     @classmethod
     def descriptor(cls) -> dict[str, Any]:
-        """`marketscan describe` / `strategy list`가 내보내는 요약."""
+        """`stockscan describe` / `strategy list`가 내보내는 요약."""
         return {
             "id": cls.id,
             "display_name": cls.display_name or cls.id,

@@ -51,10 +51,10 @@ def _set_sqlite_pragmas(dbapi_connection: object, _record: object) -> None:
 
 
 def database_url() -> str:
-    """실제로 열 DB URL. **SQLite 상대 경로는 `~/.marketscan` 기준으로 편다.**
+    """실제로 열 DB URL. **SQLite 상대 경로는 `~/.stockscan` 기준으로 편다.**
 
-    ⚠️ 편지 않으면 경로가 **현재 디렉터리**를 따라간다. `cd data && marketscan run`이
-    `data/data/marketscan.db`를 새로 만들고, 사용자는 캐시와 신호가 통째로 비어 있는
+    ⚠️ 편지 않으면 경로가 **현재 디렉터리**를 따라간다. `cd data && stockscan run`이
+    `data/data/stockscan.db`를 새로 만들고, 사용자는 캐시와 신호가 통째로 비어 있는
     것을 보게 된다 — 파일이 두 개 생겼다는 사실 자체가 잘 안 보이므로 진단이 어렵다.
     `config.py`가 "어느 디렉터리에서 CLI를 부르든 같은 파일을 보아야 한다"고 정한
     것을 여기서 지킨다 (다른 경로들은 `settings.resolve()`가 이미 하고 있다).
@@ -249,7 +249,7 @@ async def dispose() -> None:
 
 
 def _ensure_parent_dir(url: str) -> None:
-    """`sqlite+aiosqlite:///./data/marketscan.db` → ./data 를 미리 만든다."""
+    """`sqlite+aiosqlite:///./data/stockscan.db` → ./data 를 미리 만든다."""
     if not url.startswith("sqlite"):
         return
     path = url.split("///")[-1]

@@ -107,7 +107,7 @@ def _render(data: ReportInput) -> str:
         )
 
     return _DOCUMENT.format(
-        title=html.escape(f"marketscan · {result.pipeline_id} · {result.run_id}"),
+        title=html.escape(f"stockscan · {result.pipeline_id} · {result.run_id}"),
         style=_STYLE,
         heading=html.escape(data.pipeline_name or result.pipeline_id),
         run_id=html.escape(result.run_id),
@@ -294,8 +294,8 @@ _DOCUMENT = """<!doctype html>
 <h2>노드 실행</h2>
 {node_table}
 <footer>
-  marketscan · {generated} 생성 · 이 파일은 재생성 가능합니다<br>
-  신호의 근거를 더 파려면 <code>marketscan explain &lt;signal_id&gt;</code>
+  stockscan · {generated} 생성 · 이 파일은 재생성 가능합니다<br>
+  신호의 근거를 더 파려면 <code>stockscan explain &lt;signal_id&gt;</code>
 </footer>
 </main>
 </body>

@@ -96,7 +96,7 @@ class TelegramConfig(BaseModel):
 
     ⚠️ **원래 규칙 7은 "키를 설정 파일에 넣지 않는다"였다** — 설정 파일은 복사·공유되기
     때문이다. 2026-08-06에 사용자 결정으로 뒤집었다: 이 파일은 저장소 바깥
-    (`~/.marketscan/`)에 살고 개인용 self-hosted라 공유 경로가 없으며, 파일 하나로
+    (`~/.stockscan/`)에 살고 개인용 self-hosted라 공유 경로가 없으며, 파일 하나로
     끝나는 쪽이 실제로 쓰기 쉽다.
 
     **대신 두 가지를 지킨다.** 저장소의 예제에는 플레이스홀더만 두고, 환경변수를
@@ -126,7 +126,7 @@ def _real(value: str) -> str:
 
 
 class AppConfig(BaseModel):
-    """`~/.marketscan/config.yml`의 전부."""
+    """`~/.stockscan/config.yml`의 전부."""
 
     timezone: str = Field(default="Asia/Seoul", description="표시용. 저장은 항상 UTC")
 
@@ -213,7 +213,7 @@ def lookback_for(startup_candles: int) -> int:
 
 # --------------------------------------------------------------------------- 로딩
 def default_path() -> Path:
-    """기본 설정 파일. `~/.marketscan/config.yml`."""
+    """기본 설정 파일. `~/.stockscan/config.yml`."""
     settings = get_settings()
     return settings.resolve(settings.config_path)
 
@@ -232,7 +232,7 @@ def load(path: Path | None = None) -> AppConfig:
             f"예제를 그대로 쓰려면 저장소의 {SAMPLE_DIR} 안의 파일을 "
             f"{get_settings().config_dir}로 복사하세요 "
             f"(설정과 전략이 같은 디렉터리에 있어야 합니다). "
-            f"--config로 경로를 지정하거나 MARKETSCAN_CONFIG_PATH를 설정해도 됩니다."
+            f"--config로 경로를 지정하거나 STOCKSCAN_CONFIG_PATH를 설정해도 됩니다."
         )
 
     bind_config_dir(target)

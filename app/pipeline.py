@@ -473,7 +473,7 @@ async def fetch_bars(
     if missing:
         log.warning(
             f"캐시 부족으로 제외 {len(missing)}종목 — "
-            f"`marketscan ingest --commit`으로 봉을 쌓으세요."
+            f"`stockscan ingest --commit`으로 봉을 쌓으세요."
         )
     if fallbacks:
         log.warning(

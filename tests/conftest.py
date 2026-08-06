@@ -53,7 +53,7 @@ def offline_providers(monkeypatch: pytest.MonkeyPatch) -> None:
 def isolated_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """설정 디렉터리를 테스트마다 새 임시 디렉터리로 돌린다.
 
-    기본값이 `~/.marketscan`이라 두지 않으면 **테스트가 실행하는 사람의 자산을
+    기본값이 `~/.stockscan`이라 두지 않으면 **테스트가 실행하는 사람의 자산을
     건드린다** — DB·리포트가 거기에 쓰이고, `strategy new` 계열은 파일을 만들고,
     전략 목록은 그 사람이 뭘 갖고 있느냐에 따라 달라진다.
 

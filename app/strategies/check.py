@@ -1,4 +1,4 @@
-"""`marketscan strategy check` — 인과성 정적 검사 (ARCHITECTURE.md 12.6).
+"""`stockscan strategy check` — 인과성 정적 검사 (ARCHITECTURE.md 12.6).
 
 4.2 규칙 1의 인과성은 런타임에 강제할 수 없다. 하지만 **AST로 상당 부분 잡힌다.**
 LLM이 전략을 쓰고 → `check`가 거르고 → `verify`가 엔진을 검증하는 루프가 여기서

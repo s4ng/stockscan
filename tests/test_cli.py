@@ -379,7 +379,7 @@ def test_strategy_is_looked_up_next_to_the_pipeline_file(
 ):
     """설정과 전략은 한 디렉터리에 산다 — 설정만 옮기면 전략을 못 찾는다.
 
-    이것이 `~/.marketscan/config.yml`과 저장소의 `sample/`을 같은 방식으로
+    이것이 `~/.stockscan/config.yml`과 저장소의 `sample/`을 같은 방식으로
     다루게 하는 규칙이다. 조용히 다른 디렉터리로 물러서면 **어느 파일이 돈
     전략인지** 알 수 없게 되고, 소스 해시를 기록하는 의미가 사라진다 (§4.7).
     """
@@ -397,7 +397,7 @@ def test_strategy_is_looked_up_next_to_the_pipeline_file(
 
 
 def test_config_runs_without_an_explicit_path(workspace: Path):
-    """`~/.marketscan/config.yml`이 기본값이라 인자 없이 돈다."""
+    """`~/.stockscan/config.yml`이 기본값이라 인자 없이 돈다."""
     assert invoke("run", "--now", NOW, "--json").exit_code == 0
 
 

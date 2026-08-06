@@ -1,4 +1,4 @@
-"""`marketscan strategy new`가 찍어 내는 전략 템플릿.
+"""`stockscan strategy new`가 찍어 내는 전략 템플릿.
 
 `Params`를 미리 넣어 두는 이유는 4.2 규칙 3 — 노드 방식의 유일한 실질적 이득이던
 "JSON Schema → 폼 자동 생성"을 그대로 유지하기 위해서다. 코드를 고치지 않고
@@ -13,7 +13,7 @@ STRATEGY_TEMPLATE = '''"""{strategy_id} — (전략 설명을 여기에 적으�
   1. compute는 **인과적**이어야 한다. rolling · ewm · shift(양수)는 안전하고
      shift(음수) · center=True · bfill은 미래를 본다.
   2. 파라미터는 백테스트로 뒤져서 고르지 않는다. 검증된 팩터의 표준값을 쓴다.
-  3. 다 쓰면 `marketscan strategy check {strategy_id}`를 돌린다.
+  3. 다 쓰면 `stockscan strategy check {strategy_id}`를 돌린다.
 """
 
 from __future__ import annotations

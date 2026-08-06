@@ -1,6 +1,6 @@
 # ARCHITECTURE.md
 
-**marketscan** — 멀티마켓 횡단면 스크리너 · 신호 알림 CLI 설계서 (v0.5)
+**stockscan** — 멀티마켓 횡단면 스크리너 · 신호 알림 CLI 설계서 (v0.5)
 
 > **이 문서가 설계의 단일 출처다.** 구조를 바꾸는 작업 전에 읽고, 설계를 바꿨다면 함께 갱신한다.
 > ⚠️ 표시는 **미결정 또는 외부 확인이 필요한 항목**이다.
@@ -90,7 +90,7 @@
        │ stats · signals ack      │ run --commit → 알림     │ strategy check
        ▼                          ▼                        ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  marketscan CLI (Typer) — 웹 서버 없음                        │
+│  stockscan CLI (Typer) — 웹 서버 없음                        │
 │  run · backtest · serve · ingest · explain · signals ·       │
 │  stats · strategy · describe                      (12장)     │
 └───────────────┬──────────────────────────────────────────────┘
@@ -134,7 +134,7 @@
 | :--- | :--- | :--- |
 | **인터페이스** | **CLI (Typer) 하나** | ⚠️ 웹 UI는 2026-08-06에 걷어냈다 (12.9) |
 | **실행** | **함수 하나** (`app/pipeline.py`) | ⚠️ DAG 엔진도 2026-08-06에 걷어냈다 — 만들어지는 그래프가 언제나 하나였다 (4.3) |
-| 리포트 | **정적 HTML 파일 생성** | 서빙하지 않고 `~/.marketscan/reports/`에 떨어뜨린다. 반년 뒤에 열어도 그대로 보여야 하므로 **외부 리소스를 참조하지 않는다** |
+| 리포트 | **정적 HTML 파일 생성** | 서빙하지 않고 `~/.stockscan/reports/`에 떨어뜨린다. 반년 뒤에 열어도 그대로 보여야 하므로 **외부 리소스를 참조하지 않는다** |
 | 차트 | **`lightweight-charts` (Apache-2.0) — vendoring** | `backtest`에만 붙는다. CDN이 아니라 저장소에 박는다. 아래 참조 |
 | 스케줄·알림 | **`serve` 확정** | 스케줄·재시도·알림이 한곳에 모인다. 윈도우 작업 스케줄러의 마찰을 피한다 (8장) |
 | 런타임 | Python 3.12, Pydantic v2 | 3장이 PyKRX·FDR·exchange_calendars 위에 서 있어 대체 언어가 없다 (부록 C) |
@@ -528,7 +528,7 @@ class Strategy(Protocol):
 
 1. **`compute`는 인과적이어야 한다.** `rolling` · `ewm` · `shift(+n)`은 안전하고,
    **`shift(-n)` · `center=True` · `bfill`은 미래를 본다.** 런타임에 강제할 수 없지만
-   `marketscan strategy check`가 AST로 상당 부분 잡는다(12.6). **통과가 보장은 아니므로**
+   `stockscan strategy check`가 AST로 상당 부분 잡는다(12.6). **통과가 보장은 아니므로**
    4.8의 난수 신호 테스트가 사후 방어선으로 남는다.
 2. **전략에 Provider·Cache 핸들을 주지 않는다.** 이미 `end`로 잘린 DataFrame만 받으므로
    데이터를 통한 미래 참조가 구조적으로 불가능하다.
@@ -696,7 +696,7 @@ PK: (venue, symbol, timeframe, adjusted, bar_time)
 
 전략이 파이썬 클래스가 되면서 새로 생긴 구멍이다. 파이프라인이 `momentum.py`를 **이름으로만** 참조하면, 그 파일을 고치는 순간 **과거 버전이 무엇이었는지가 소급으로 바뀐다.** "그때 그 신호가 어떤 전략에서 나왔는지"를 잃는 것이고, `pipeline_versions`를 불변으로 둔 이유가 그대로 무너진다.
 
-- 전략의 **정본은 `~/.marketscan/`의 파일**로 둔다. IDE·git·리뷰를 쓸 수 있는 쪽이 낫다.
+- 전략의 **정본은 `~/.stockscan/`의 파일**로 둔다. IDE·git·리뷰를 쓸 수 있는 쪽이 낫다.
   **파이프라인 파일과 같은 디렉터리에서 찾는다** — 설정과 전략은 한 벌이라, 한쪽만 옮기면
   "그때 그 신호가 어느 파일에서 나왔는가"가 다시 흐려진다. 저장소의 `sample/`은 그 한 벌의 예제다.
 - 소스의 **SHA-256을 `pipeline_versions`에 기록**하고, 전문을 `strategy_versions`에 스냅샷한다.
@@ -926,19 +926,19 @@ telegram:
 **`backend/` 와 `frontend/` 구분이 없다.** 프론트가 없으면 "백엔드"라는 이름도 의미가 없다.
 **`app/nodes/`도 없다** — DAG 엔진과 함께 걷어냈다 (4.3).
 
-**저장소에는 코드와 예제만 있다.** 사용자 자산은 전부 `~/.marketscan/`에 있다.
+**저장소에는 코드와 예제만 있다.** 사용자 자산은 전부 `~/.stockscan/`에 있다.
 
 ```
-~/.marketscan/                     # ★ 사용자 자산 (백업 대상). 저장소 바깥
+~/.stockscan/                     # ★ 사용자 자산 (백업 대상). 저장소 바깥
 ├── config.yml                     # 기본 설정 (6장 스키마)
 ├── <전략>.py                      # 사용자 전략 — **설정 파일 옆**에서 찾는다 (4.7)
-├── data/marketscan.db             # SQLite. ohlcv_cache가 여기 산다 (3.9)
+├── data/stockscan.db             # SQLite. ohlcv_cache가 여기 산다 (3.9)
 └── reports/                       # 실행·백테스트 리포트 (재생성 가능)
 
-marketscan/
+stockscan/
 ├── ARCHITECTURE.md · CLAUDE.md · README.md
 ├── pyproject.toml · uv.lock       # ★ Docker를 대신하는 재현성 장치
-├── sample/                        # 설정·전략 예제 한 벌 (6장). ~/.marketscan/으로 복사해 쓴다
+├── sample/                        # 설정·전략 예제 한 벌 (6장). ~/.stockscan/으로 복사해 쓴다
 ├── app/
 │   ├── config.py     ★ 설정 (6장). 사람이 적는 것 전부 — 나머지는 유도하거나 상수
 │   ├── pipeline.py   ★ 유니버스 → 봉 → 전략 → 기록 → 로그 (4.3). 함수 하나
@@ -970,10 +970,10 @@ marketscan/
 
 **`run_report`에는 차트를 붙이지 않는다.** 실행 1회 리포트는 "방금 뭐가 나왔나"라 표로 충분하고, 여기까지 라이브러리를 얹으면 dry-run 스무 번에 `latest.html`이 200KB씩 무거워진다. **차트는 `backtest`만.**
 
-- **`app/strategies/`(프레임워크)와 `~/.marketscan/`의 전략(사용자 자산)을 구분한다.** 전자는
+- **`app/strategies/`(프레임워크)와 `~/.stockscan/`의 전략(사용자 자산)을 구분한다.** 전자는
   로더·프로토콜이고 후자는 데이터에 가깝다. **후자는 저장소 바깥에 둔다** — 코드를 지우고
   다시 받아도 살아남아야 하는 것이 저장소 안에 있으면 언젠가 함께 지워진다.
-- **`~/.marketscan/`만 사용자 자산이다.** 통째로 백업 대상이다. 저장소 쪽에는 지우면 곤란한
+- **`~/.stockscan/`만 사용자 자산이다.** 통째로 백업 대상이다. 저장소 쪽에는 지우면 곤란한
   것이 하나도 없다 — `sample/`은 예제라 지워도 되고, `reports/`는 재생성 가능하다.
 - ⬜ 아직 없는 것: `app/llm/`(P4 동결) · `app/risk/`(P5).
 
@@ -985,17 +985,17 @@ marketscan/
 
 ```bash
 uv sync
-uv tool install .          # marketscan 이 PATH에 올라간다
-marketscan describe        # 설치 확인
+uv tool install .          # stockscan 이 PATH에 올라간다
+stockscan describe        # 설치 확인
 ```
 
 **자동 실행은 `serve`로 확정했다.** 시장별 마감 뒤에 아래가 일어난다.
 
 ```
-marketscan ingest --commit    # 일봉·지수 수집 → ohlcv_cache
-marketscan run --commit       # 판정 (Fresh Bar Gate가 시장을 알아서 거른다)
-marketscan evaluate           # 사후 수익률 채우기
-marketscan scorecard          # 매월 1회 — ★ 제품
+stockscan ingest --commit    # 일봉·지수 수집 → ohlcv_cache
+stockscan run --commit       # 판정 (Fresh Bar Gate가 시장을 알아서 거른다)
+stockscan evaluate           # 사후 수익률 채우기
+stockscan scorecard          # 매월 1회 — ★ 제품
 ```
 
 - Fresh Bar Gate(3.5)가 있으므로 `--market` 없이 전부 돌려도 되지만, 명시하는 쪽이 로그를
@@ -1024,18 +1024,18 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 
 **보안** — 네트워크에 아무것도 열지 않는다(웹 UI를 걷어내면서 포트도 사라졌다). 남은 비밀은 **텔레그램 토큰뿐**이며 시세에는 자격 증명이 필요 없다(3.3).
 
-**백업** — `~/.marketscan/` 하나(설정·전략·SQLite·리포트) · 마스터 키. `ohlcv_cache`는 무료 소스가 막혀도 남는 유일한 자산이므로 반드시 포함한다(3.9).
+**백업** — `~/.stockscan/` 하나(설정·전략·SQLite·리포트) · 마스터 키. `ohlcv_cache`는 무료 소스가 막혀도 남는 유일한 자산이므로 반드시 포함한다(3.9).
 
-**환경 변수** — 접두사는 `MARKETSCAN_`. 상대 경로는 전부 `config_dir` 기준으로 펴진다.
+**환경 변수** — 접두사는 `STOCKSCAN_`. 상대 경로는 전부 `config_dir` 기준으로 펴진다.
 
 | 변수 | 기본값 |
 | :--- | :--- |
-| `MARKETSCAN_CONFIG_DIR` | `~/.marketscan` |
-| `MARKETSCAN_CONFIG_PATH` | `config.yml` |
-| `MARKETSCAN_STRATEGIES_DIR` | (없음 — 설정 파일과 같은 디렉터리) |
-| `MARKETSCAN_DATABASE_URL` | `sqlite+aiosqlite:///./data/marketscan.db` |
-| `MARKETSCAN_REPORTS_DIR` | `reports` |
-| `MARKETSCAN_TELEGRAM_TOKEN` · `..._CHAT_ID` | (없음 — `config.yml`의 `telegram:`을 덮어쓴다) |
+| `STOCKSCAN_CONFIG_DIR` | `~/.stockscan` |
+| `STOCKSCAN_CONFIG_PATH` | `config.yml` |
+| `STOCKSCAN_STRATEGIES_DIR` | (없음 — 설정 파일과 같은 디렉터리) |
+| `STOCKSCAN_DATABASE_URL` | `sqlite+aiosqlite:///./data/stockscan.db` |
+| `STOCKSCAN_REPORTS_DIR` | `reports` |
+| `STOCKSCAN_TELEGRAM_TOKEN` · `..._CHAT_ID` | (없음 — `config.yml`의 `telegram:`을 덮어쓴다) |
 
 **타임존** — 프로세스는 UTC로 고정하고 표시만 `user_timezone`으로 변환한다. 스케줄 시각은 로컬 기준으로 적되 **시장 마감과의 관계를 함께 남겨** 서머타임 전환 때 확인할 수 있게 한다(3.2).
 
@@ -1160,7 +1160,7 @@ README는 "무엇이고 어떻게 쓰는가"만 갖는다).
 | — | `review`(신호 이력 화면) | **없애기로 확정.** 자리는 `backtest`가 아니라 `scorecard`가 이어받았다 — 둘은 답하는 질문이 다르다 (12.7) |
 | — | 분봉 보존 정책 | 수집하지 않기로 하면서 소멸. `ohlcv_cache`는 SQLite 확정 (3.9) |
 | — | 지표 라이브러리 | 전략 클래스가 각자 임포트하므로 전역 결정이 아니게 됐다 (2.1) |
-| — | 프로젝트 이름 | **`marketscan`.** 3장(멀티 마켓)이 존재 이유이므로 이름이 그것을 말한다. `trade`는 하지 않는 일을 암시하고 `flow`는 폐기된 캔버스 은유였다 |
+| — | 프로젝트 이름 | `tradeflow` → `marketscan` → **`stockscan` (2026-08-06).** `trade`는 하지 않는 일(주문)을 암시하고 `flow`는 폐기된 캔버스 은유였다. `market`은 멀티마켓이 존재 이유이던 시절의 이름인데, **코인을 걷어내면서 대상이 주식 둘로 좁혀져** 더는 맞지 않는다. 이름이 하는 일을 말해야 한다 |
 | — | 배포 형태 / 구현 언어 | **`uv` + `[project.scripts]` / 파이썬 유지** (부록 C) |
 | — | LLM 배치 | 필터 뒤로 확정. 비용과 역할(정성 필터) 양쪽에서 결론이 같다 (5장) |
 | **10** | **`acted` 응답을 어떻게 받을 것인가** | **텔레그램 인라인 버튼 확정 (2026-08-06).** 터미널에서 `signals ack`를 치게 두면 아무도 안 쳐서 오버라이드 데이터가 영영 안 쌓인다. `serve`가 `getUpdates`로 콜백을 받는다 — **지금까지 알림은 나가기만 했으므로 들어오는 방향이 새로 열렸다.** ⚠️ 버튼은 신호가 **1건일 때만** 단다 (메시지 단위라 여러 건이면 어느 신호의 답인지 정해지지 않는다) |
@@ -1278,9 +1278,9 @@ leaky — 위반 1건
 `explain`이 **한 신호의 근거**를 답한다면, `backtest`는 **한 종목의 지난 날들**을 답한다. 하루씩 되감으며 전략을 다시 돌리고, 조건을 만족한 날을 봉 위에 찍는다.
 
 ```bash
-marketscan backtest krx:005930 --start 20251201
-marketscan backtest 삼성전자 --start 2025-12-01 --end 2026-03-01
-# → ~/.marketscan/reports/backtest_krx_005930_20251201_20260301.html
+stockscan backtest krx:005930 --start 20251201
+stockscan backtest 삼성전자 --start 2025-12-01 --end 2026-03-01
+# → ~/.stockscan/reports/backtest_krx_005930_20251201_20260301.html
 ```
 
 **용도는 하나다: "내 구현이 안 틀렸나."** "이 전략이 돈이 되나"가 아니다(4.8). 파라미터를 바꿔 가며 좋은 값을 찾는 도구로 쓰기 시작하면 그 순간 검증된 표준값이 아니라 내가 고른 값이 된다.
@@ -1311,7 +1311,7 @@ marketscan backtest 삼성전자 --start 2025-12-01 --end 2026-03-01
 > 버튼이 하던 일(`run` · `backtest` · `ingest` 실행, 리포트 열기)은 **전부 터미널에서 되는 일**이었다. 새로 할 수 있게 된 것이 없는데 유지할 표면이 하나 늘었고, 그러자 **"화면이 있으니 화면에 뭘 더 넣자"가 기능이 붙는 주된 통로**가 됐다. 잡스러운 기능이 붙는다는 체감의 상당 부분이 여기서 나왔다.
 
 ```bash
-marketscan serve      # 상주. 화면 없음. 종료는 Ctrl+C
+stockscan serve      # 상주. 화면 없음. 종료는 Ctrl+C
 ```
 
 지금 `serve`가 하는 일은 셋뿐이다.
@@ -1325,7 +1325,7 @@ marketscan serve      # 상주. 화면 없음. 종료는 Ctrl+C
 - ★ **실행은 `app/service.py`를 통해서만 한다.** 스케줄러가 엔진을 직접 부르면 "스케줄이 돌린 것과 터미널로 돌린 것이 다른 일을 하는" 상태가 되고, 그건 규칙 11·13을 우회하는 것이다. 서비스 계층이 있는 이유가 이것 하나다.
 - **실행은 한 번에 하나만**(`service.run_lock`). 겹친 `--commit` 둘은 같은 봉을 두 번 소비한다.
 - **네트워크에 아무것도 열지 않는다.** 바인딩이 없으므로 "인증 없는 화면이 `--commit`을 부를 수 있다"는 위험 자체가 없어졌다.
-- **결과를 보는 창구는 텔레그램과 CLI다** — `signals list` · `explain <id>` · `stats`. 리포트 HTML은 `~/.marketscan/reports/`에서 직접 연다.
+- **결과를 보는 창구는 텔레그램과 CLI다** — `signals list` · `explain <id>` · `stats`. 리포트 HTML은 `~/.stockscan/reports/`에서 직접 연다.
 
 > **되살리지 않는다.** React 캔버스도, 서버 렌더 화면도, `package.json`도. 결과를 더 잘 보고 싶다는 요구가 생기면 **화면이 아니라 알림 내용과 성적표를 고친다** — 그쪽이 실제로 읽는 표면이다.
 

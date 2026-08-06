@@ -196,7 +196,7 @@ async def test_the_alert_carries_price_and_reason_not_just_a_rank():
     assert "80,000" in text  # 값
     assert "trend_strength" in text  # 근거
     assert "krx 1위" in text
-    assert "marketscan explain 1" in text  # 되짚을 수단
+    assert "stockscan explain 1" in text  # 되짚을 수단
 
 
 @pytest.mark.asyncio

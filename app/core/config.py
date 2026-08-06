@@ -3,7 +3,7 @@
 Self-hosted 단일 사용자 전제이므로 설정은 환경변수 하나로 끝낸다.
 민감한 값(마스터 키, API 토큰)은 절대 기본값을 두지 않는다.
 
-경로 기본값은 모두 **상대 경로**이고, 쓰는 쪽에서 `settings.resolve()`로 `~/.marketscan`
+경로 기본값은 모두 **상대 경로**이고, 쓰는 쪽에서 `settings.resolve()`로 `~/.stockscan`
 기준의 절대 경로로 편다. 어느 디렉터리에서 CLI를 부르든 같은 파일을 보아야 하기
 때문이다 — 펴지 않으면 `cd` 한 번에 DB가 새로 생기고, 사용자는 캐시와 신호가 통째로
 비어 있는 것을 보게 된다.
@@ -25,7 +25,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 #: 사용자 설정·전략의 정본 위치. 저장소 바깥이라 재설치·재클론에도 살아남는다.
-DEFAULT_CONFIG_DIR = Path.home() / ".marketscan"
+DEFAULT_CONFIG_DIR = Path.home() / ".stockscan"
 
 #: 저장소에 든 예제 설정·전략. 여기서 `config_dir`로 복사해 쓴다 (정본이 아니다).
 SAMPLE_DIR = PROJECT_ROOT / "sample"
@@ -36,21 +36,21 @@ class Settings(BaseSettings):
     #:
     #: 상대 경로 `.env`는 **실행한 디렉터리** 기준이라, 다른 데서 `serve`를 띄우면
     #: 토큰이 조용히 안 잡힌다 — 그러면 알림이 안 오는데 이유가 화면에 없다.
-    #: 설정·전략·DB가 이미 `~/.marketscan`에 사니 비밀도 거기 두는 쪽이 맞다.
+    #: 설정·전략·DB가 이미 `~/.stockscan`에 사니 비밀도 거기 두는 쪽이 맞다.
     model_config = SettingsConfigDict(
         env_file=(".env", str(DEFAULT_CONFIG_DIR / ".env")),
-        env_prefix="MARKETSCAN_",
+        env_prefix="STOCKSCAN_",
         extra="ignore",
     )
 
-    app_name: str = "marketscan"
+    app_name: str = "stockscan"
     debug: bool = False
 
-    #: SQLite 상대 경로는 `config_dir` 기준으로 편다 — `~/.marketscan/data/marketscan.db`.
+    #: SQLite 상대 경로는 `config_dir` 기준으로 편다 — `~/.stockscan/data/stockscan.db`.
     #: `ohlcv_cache`가 여기 산다. 저장소를 지워도 남아야 하는 파일이다 (3.9).
-    database_url: str = "sqlite+aiosqlite:///./data/marketscan.db"
+    database_url: str = "sqlite+aiosqlite:///./data/stockscan.db"
 
-    #: 설정·전략·DB·리포트가 사는 디렉터리. 기본 `~/.marketscan`.
+    #: 설정·전략·DB·리포트가 사는 디렉터리. 기본 `~/.stockscan`.
     config_dir: Path = DEFAULT_CONFIG_DIR
 
     #: 사용자 전략 파일의 정본 위치. git으로 관리하고 소스 해시가 실행에 박힌다 (4.7).
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     #: 전략은 홈에 남으면 예제가 반쪽이 된다. 값을 주면 그쪽이 이긴다.
     strategies_dir: Path | None = None
 
-    #: 설정 파일. 상대 경로는 `config_dir` 기준 — 기본값은 `~/.marketscan/config.yml`.
+    #: 설정 파일. 상대 경로는 `config_dir` 기준 — 기본값은 `~/.stockscan/config.yml`.
     config_path: Path = Path("config.yml")
 
     #: 백테스트·실행 리포트 산출물. 서빙하지 않고 파일로 떨어뜨린다 (2.1).
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     def resolve(self, path: Path | str) -> Path:
         """상대 경로를 `config_dir` 기준으로 편다 (사용자 자산: 설정·전략·DB·리포트).
 
-        `~`를 편다 — 환경변수로 `~/.marketscan/other.yml`을 넘겨도 그대로 문자열이라
+        `~`를 편다 — 환경변수로 `~/.stockscan/other.yml`을 넘겨도 그대로 문자열이라
         `Path("~")`라는 이름의 디렉터리를 찾게 된다.
         """
         p = Path(path).expanduser()

@@ -318,7 +318,7 @@ async def execute_backtest(
         if loaded_bars.df.empty:
             raise ServiceError(
                 f"{ref.key}의 봉을 하나도 받지 못했습니다. "
-                f"`marketscan ingest --commit`으로 먼저 봉을 쌓거나 종목을 확인하세요.",
+                f"`stockscan ingest --commit`으로 먼저 봉을 쌓거나 종목을 확인하세요.",
                 kind="data",
             )
         return replay(

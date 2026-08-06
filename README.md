@@ -1,4 +1,4 @@
-# marketscan
+# stockscan
 
 **정해둔 전략으로 한국·미국 주식을 매일 훑어 매수 후보를 뽑고, 텔레그램으로
 보내 주는 프로그램입니다.**
@@ -8,7 +8,7 @@
 
 · 성호전자 (krx:043260)  15,870 (+6.22%)
    krx 1위/195 · trend_strength=3.409 · 손절 14,210 (-10.5%)
-   marketscan explain 42
+   stockscan explain 42
 
 이 전략 최근 20건: 승률 55% · 20봉 중앙값 +1.8% (벤치마크 대비 -0.4%)
 
@@ -40,11 +40,11 @@
 
 ```bash
 uv sync
-mkdir -p ~/.marketscan && cp sample/* ~/.marketscan/   # 설정과 전략은 한 벌입니다
-uv run marketscan describe                             # 설치 확인
+mkdir -p ~/.stockscan && cp sample/* ~/.stockscan/   # 설정과 전략은 한 벌입니다
+uv run stockscan describe                            # 설치 확인
 ```
 
-설정은 `~/.marketscan/config.yml` 하나이고, **사람이 정하는 것은 넷뿐입니다.**
+설정은 `~/.stockscan/config.yml` 하나이고, **사람이 정하는 것은 넷뿐입니다.**
 
 ```yaml
 timezone: Asia/Seoul
@@ -69,14 +69,14 @@ telegram:
 것이 의도입니다 — 설정에서 슬쩍 바꿔 돌려 보는 경로를 없앤 것입니다.
 
 ```bash
-marketscan run                  # 후보 뽑기. 기본은 dry-run(아무것도 남지 않습니다)
-marketscan run --commit         # signals 기록 + 봉 소비
-marketscan ingest --commit      # 일봉·지수 수집 → ohlcv_cache
-marketscan evaluate             # 사후 수익률 채우기
-marketscan scorecard --send     # ★ 성적표 (텔레그램으로도)
-marketscan explain 1            # 이 신호가 왜 떴는가
-marketscan backtest krx:005930 --start 20251201
-marketscan serve                # 상주 — 스케줄·알림·하트비트·성적표
+stockscan run                  # 후보 뽑기. 기본은 dry-run(아무것도 남지 않습니다)
+stockscan run --commit         # signals 기록 + 봉 소비
+stockscan ingest --commit      # 일봉·지수 수집 → ohlcv_cache
+stockscan evaluate             # 사후 수익률 채우기
+stockscan scorecard --send     # ★ 성적표 (텔레그램으로도)
+stockscan explain 1            # 이 신호가 왜 떴는가
+stockscan backtest krx:005930 --start 20251201
+stockscan serve                # 상주 — 스케줄·알림·하트비트·성적표
 ```
 
 **평소에는 `serve` 하나만 띄워 두면 됩니다.** 나머지는 그것이 알아서 부릅니다.
@@ -109,13 +109,13 @@ pykrx 1.0.x가 임포트 시점에 `pkg_resources`를 부르기 때문입니다.
 ## 프로젝트 구조
 
 ```
-~/.marketscan/                 ★ 사용자 자산 (백업 대상) — 저장소 바깥에 있다
+~/.stockscan/                  ★ 사용자 자산 (백업 대상) — 저장소 바깥에 있다
 ├── config.yml                 설정 (사람이 정하는 것 넷)
 ├── <전략>.py                  파일 하나 = 전략 하나. 해시가 실행에 박힌다
-├── data/marketscan.db         ohlcv_cache · signals · 실행 이력
+├── data/stockscan.db          ohlcv_cache · signals · 실행 이력
 └── reports/                   실행·백테스트 리포트 HTML
 
-marketscan/
+stockscan/
 ├── ARCHITECTURE.md            설계 문서 (단일 출처)
 ├── CLAUDE.md                  작업 규칙
 ├── sample/                    설정·전략 예제 한 벌

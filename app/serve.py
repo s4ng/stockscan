@@ -304,7 +304,7 @@ class Scheduler:
         tail = f"{last.label} {last.detail}" if last else "(아직 없음)"
 
         lines = [
-            f"✅ marketscan 살아 있습니다 ({stamp})",
+            f"✅ stockscan 살아 있습니다 ({stamp})",
             f"오늘 실행 {len(today)}회 · 신호 {signals}건",
             f"마지막: {tail}",
         ]
@@ -314,7 +314,7 @@ class Scheduler:
         if missing:
             lines.append(
                 f"⚠️ 봉이 끊겨 사후 수익률을 못 채운 종목 {len(missing)}개 — "
-                f"`marketscan ingest --commit`"
+                f"`stockscan ingest --commit`"
             )
         await self._send("\n".join(lines))
 
@@ -374,7 +374,7 @@ def _signal_message(
         if reason:
             lines.append(f"   {reason}")
         if signal_id is not None:
-            lines.append(f"   marketscan explain {signal_id}")
+            lines.append(f"   stockscan explain {signal_id}")
 
     if outcome.written > 10:
         lines.append(f"… 외 {outcome.written - 10}건")

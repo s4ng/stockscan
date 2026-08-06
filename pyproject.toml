@@ -1,7 +1,8 @@
 [project]
-name = "marketscan"
+name = "stockscan"
 version = "0.1.0"
-description = "매수 후보를 뽑아 텔레그램으로 보내 주는 개인용 스크리너"
+description = "매수 후보를 뽑아 텔레그램으로 보내 주는 개인용 프로그램"
+keywords = ["stock", "screener", "krx", "telegram"]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,7 +12,7 @@ dependencies = [
     "pandas>=2.2",
     "sqlalchemy>=2.0",
     "aiosqlite>=0.20",
-    # 파이프라인 정의 형식 — YAML로 확정 (11장 4번). 저장 스냅샷은 JSON 그대로다.
+    # 설정 형식 — YAML (6장). 저장 스냅샷은 JSON 그대로다.
     "pyyaml>=6.0",
     # ⚠️ 1.2.x로 올리지 못하고 있다. 1.2.3부터 pkg_resources를 버려(좋다) 아래 setuptools
     #    핀이 필요 없어지지만, 같은 릴리스부터 `pandas<3.0` 상한이 붙는다. 우리는 3.0.5를
@@ -29,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-marketscan = "app.cli.main:main"
+stockscan = "app.cli.main:main"
 
 [dependency-groups]
 dev = [

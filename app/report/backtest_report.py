@@ -88,7 +88,7 @@ def _render(result: ReplayResult, tz: str) -> str:
     name = result.instrument.display_name or result.instrument.symbol
 
     return _DOCUMENT.format(
-        title=html.escape(f"marketscan 백테스트 · {result.instrument.key}"),
+        title=html.escape(f"stockscan 백테스트 · {result.instrument.key}"),
         style=_STYLE.replace("{marker_color}", MARKER_COLOR),
         heading=html.escape(f"{result.instrument.key} · {name}"),
         strategy=html.escape(result.strategy_id),
@@ -313,7 +313,7 @@ _DOCUMENT = """<!doctype html>
 <h2>조건 충족일 {signals}건</h2>
 {table}
 <footer>
-  marketscan · {generated} 생성 · 이 파일은 재생성 가능합니다<br>
+  stockscan · {generated} 생성 · 이 파일은 재생성 가능합니다<br>
   차트: TradingView Lightweight Charts™ (Apache-2.0, <code>app/report/vendor/</code>에 동봉)<br>
   시각은 {tz} 기준이며 <strong>봉이 마감한 순간</strong>입니다.
 </footer>

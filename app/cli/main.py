@@ -1,4 +1,4 @@
-"""marketscan CLI (ARCHITECTURE.md 12장).
+"""stockscan CLI (ARCHITECTURE.md 12장).
 
 사람과 LLM이 같은 표면으로 결과에 질문한다. **실행 본체는 스케줄러도 터미널도
 `app/service.py`를 지난다** — 갈라지면 규칙 11·13이 우회된다.
@@ -48,7 +48,7 @@ from app.strategies.registry import (
 UTC = ZoneInfo("UTC")
 
 cli = typer.Typer(
-    name="marketscan",
+    name="stockscan",
     help="매수 후보를 뽑아 텔레그램으로 보내 주는 프로그램",
     no_args_is_help=True,
     add_completion=False,
@@ -377,11 +377,11 @@ def alert_test(as_json: JsonOpt = False) -> None:
     if channel.id == "log":
         out.fail(
             ExitCode.VALIDATION,
-            "보낼 채널이 없습니다 — MARKETSCAN_TELEGRAM_TOKEN·MARKETSCAN_TELEGRAM_CHAT_ID를 "
+            "보낼 채널이 없습니다 — STOCKSCAN_TELEGRAM_TOKEN·STOCKSCAN_TELEGRAM_CHAT_ID를 "
             f"설정하세요 ({get_settings().resolve('.env')} 또는 환경변수).",
         )
     stamp = format_time(datetime.now(UTC))
-    delivery = asyncio.run(channel.send(f"🔔 marketscan 테스트 알림 ({stamp})"))
+    delivery = asyncio.run(channel.send(f"🔔 stockscan 테스트 알림 ({stamp})"))
     if not delivery.ok:
         out.fail(ExitCode.DATA, f"보내지 못했습니다 — {delivery.error}")
     out.emit(
@@ -505,7 +505,7 @@ def evaluate(
             f"{', '.join(report['missing_bars'][:10])}"
         )
         human.append(
-            "   `marketscan ingest --commit`으로 봉을 쌓으세요. 밀린 종목은 대개 "
+            "   `stockscan ingest --commit`으로 봉을 쌓으세요. 밀린 종목은 대개 "
             "내린 종목이라, 이대로 두면 성적표가 낙관 편향됩니다 (규칙 18)."
         )
     out.emit({"ok": True, **report}, human)
@@ -565,7 +565,7 @@ def serve() -> None:
     if channel.id == "log":
         out.warn(
             "텔레그램 토큰이 없어 알림을 **기록만** 합니다 (아무 데도 안 갑니다). "
-            "MARKETSCAN_TELEGRAM_TOKEN·MARKETSCAN_TELEGRAM_CHAT_ID를 설정하세요."
+            "STOCKSCAN_TELEGRAM_TOKEN·STOCKSCAN_TELEGRAM_CHAT_ID를 설정하세요."
         )
 
     out.progress("상주 실행을 시작합니다. 종료는 Ctrl+C.")
@@ -776,7 +776,7 @@ def describe(as_json: JsonOpt = False) -> None:
                 ],
                 ["전략", "봉", "sha256", "로드"],
             )
-            or ["  (전략 없음 — `marketscan strategy new <이름>`으로 만드세요)"]
+            or ["  (전략 없음 — `stockscan strategy new <이름>`으로 만드세요)"]
         ),
         "",
         f"설정 {config_info['path']}"
@@ -792,7 +792,7 @@ def describe(as_json: JsonOpt = False) -> None:
             else []
         ),
         f"마지막 실행 {last['run_id'] if last else '(없음)'}",
-        "캐시 커버리지 — `marketscan ingest`가 대상별로 보여 줍니다",
+        "캐시 커버리지 — `stockscan ingest`가 대상별로 보여 줍니다",
     ]
     out.emit(payload, human)
 
@@ -835,7 +835,7 @@ def signals_list(
             for r in rows
         ],
         ["id", "종목", "이름", f"봉 마감 ({timezone_label(tz)})", "전략", "실행"],
-    ) or ["신호가 없습니다. `marketscan run --commit`으로 기록됩니다."]
+    ) or ["신호가 없습니다. `stockscan run --commit`으로 기록됩니다."]
     out.emit(payload, human)
 
 
@@ -860,13 +860,13 @@ def signals_ack(
     if not _database_exists():
         out.fail(
             ExitCode.VALIDATION,
-            "기록된 신호가 없습니다. `marketscan run --commit`으로 먼저 신호를 남기세요.",
+            "기록된 신호가 없습니다. `stockscan run --commit`으로 먼저 신호를 남기세요.",
         )
     record = asyncio.run(_ack(signal_id, acted))
     if record is None:
         out.fail(
             ExitCode.VALIDATION,
-            f"신호 {signal_id}번을 찾을 수 없습니다. `marketscan signals list`로 id를 확인하세요.",
+            f"신호 {signal_id}번을 찾을 수 없습니다. `stockscan signals list`로 id를 확인하세요.",
         )
         return
 
@@ -918,7 +918,7 @@ def explain(
     if payload is None:
         out.fail(
             ExitCode.VALIDATION,
-            f"신호 {signal_id}번을 찾을 수 없습니다. `marketscan signals list`로 id를 확인하세요.",
+            f"신호 {signal_id}번을 찾을 수 없습니다. `stockscan signals list`로 id를 확인하세요.",
         )
         return
 
@@ -1052,7 +1052,7 @@ def stats(
 ) -> None:
     """신호 이력 집계. 부작용 없음.
 
-    사후 성적은 `marketscan scorecard`가 냅니다 — 이쪽은 건수와 분산입니다.
+    사후 성적은 `stockscan scorecard`가 냅니다 — 이쪽은 건수와 분산입니다.
     """
     out = Out(as_json)
     payload = asyncio.run(_stats(out, group_by, compare))
@@ -1070,7 +1070,7 @@ def stats(
         human += [
             "",
             f"오버라이드 — 실행 {a['acted']} / 무시 {a['ignored']} / 미응답 {a['unanswered']}",
-            "※ 무시한 신호의 사후 성과는 `marketscan scorecard`가 냅니다.",
+            "※ 무시한 신호의 사후 성과는 `stockscan scorecard`가 냅니다.",
         ]
     out.emit(payload, human)
 
@@ -1101,7 +1101,7 @@ async def _stats(out: Out, group_by: str, compare: str | None) -> dict[str, Any]
 # ========================================================================== strategy
 @strategy_app.command("list")
 def strategy_list(as_json: JsonOpt = False) -> None:
-    """설정 디렉터리(`~/.marketscan`)의 전략과 소스 해시를 보여 줍니다."""
+    """설정 디렉터리(`~/.stockscan`)의 전략과 소스 해시를 보여 줍니다."""
     out = Out(as_json)
     sources = [s.to_dict() for s in discover()]
     out.emit(
@@ -1128,7 +1128,7 @@ def strategy_new(
     out.progress(f"{path} 를 만들었습니다.")
     out.emit(
         {"ok": True, "strategy_id": name, "path": str(path)},
-        [f"다음: compute를 채우고 `marketscan strategy check {name}`을 돌리세요."],
+        [f"다음: compute를 채우고 `stockscan strategy check {name}`을 돌리세요."],
     )
 
 

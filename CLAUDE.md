@@ -4,7 +4,7 @@
 
 ## 프로젝트
 
-**marketscan** — 정해둔 전략으로 한국·미국 주식을 매일 훑어 **매수 후보를 뽑고
+**stockscan** — 정해둔 전략으로 한국·미국 주식을 매일 훑어 **매수 후보를 뽑고
 텔레그램으로 보내 주는** 개인용 프로그램.
 
 | 명령 | 하는 일 |
@@ -53,7 +53,7 @@
 **현재 Phase 1·2·3·3.5 완료 — 다음은 관찰이다.** `serve`를 띄워 두고 신호가 쌓이기를
 기다린 뒤 매월 오는 성적표를 읽는다. 목록은 `README.md`의 체크박스를 본다.
 
-★ **채점 경로가 붙었다** — `marketscan evaluate`(사후 수익률) · `marketscan scorecard`
+★ **채점 경로가 붙었다** — `stockscan evaluate`(사후 수익률) · `stockscan scorecard`
 (성적표). 성적표는 `serve`가 매월 `scorecard_day`에 텔레그램으로 보내고, 일일 알림에도
 "이 전략 최근 N건 성적" 한 줄이 붙는다.
 
@@ -77,7 +77,7 @@ TypeScript·빌드 단계는 이 저장소에 존재하지 않는다. 되살리�
 성적표가 6개월치 숫자를 낸 뒤에 다시 꺼낸다.
 
 **시세 소스는 3종이고 전부 실물·무인증이다** (PyKRX · yfinance · FDR). 파이프라인
-하나가 한국·미국을 동시에 훑는다. 기본은 `~/.marketscan/config.yml`(추세추종 55일
+하나가 한국·미국을 동시에 훑는다. 기본은 `~/.stockscan/config.yml`(추세추종 55일
 돌파)이고, 12-1 횡단면 모멘텀은 `demo.yaml`에 남아 `-p`로 부른다.
 유니버스는 설정의 `universe:` 한 곳에서 나온다 — venue별로 몇 종목까지 훑을지만 적고,
 **컷 방식(거래대금 상위 N vs 목록 앞 N)은 소스의 능력에서 유도된다**(`config.uses_turnover`).
@@ -112,29 +112,29 @@ uv sync
 uv run pytest -q
 uv run ruff check app tests
 
-uv run marketscan describe          # 전략·파이프라인·마지막 실행
-uv run marketscan run               # dry-run (기본)
-uv run marketscan run --commit      # 부작용 허용
-uv run marketscan ingest            # 수집 계획 + 캐시 커버리지 (기본, 부작용 없음)
-uv run marketscan ingest --commit   # 실제 수집 → ohlcv_cache
-uv run marketscan backtest krx:005930 --start 20251201  # 날짜별 리플레이 + 차트
-uv run marketscan run -c other.yml   # 다른 설정 (`-p`에서 `-c`로 바뀌었다)
-uv run marketscan evaluate          # 사후 수익률 채우기 (외부 호출 없음)
-uv run marketscan scorecard         # 성적표 — 알림을 얼마나 믿을지
-uv run marketscan scorecard --send  # 텔레그램으로도 보낸다
-uv run marketscan serve             # 스케줄 + 알림 + 성적표 (상주, 화면 없음)
-uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 지금 본다)
+uv run stockscan describe          # 전략·파이프라인·마지막 실행
+uv run stockscan run               # dry-run (기본)
+uv run stockscan run --commit      # 부작용 허용
+uv run stockscan ingest            # 수집 계획 + 캐시 커버리지 (기본, 부작용 없음)
+uv run stockscan ingest --commit   # 실제 수집 → ohlcv_cache
+uv run stockscan backtest krx:005930 --start 20251201  # 날짜별 리플레이 + 차트
+uv run stockscan run -c other.yml   # 다른 설정 (`-p`에서 `-c`로 바뀌었다)
+uv run stockscan evaluate          # 사후 수익률 채우기 (외부 호출 없음)
+uv run stockscan scorecard         # 성적표 — 알림을 얼마나 믿을지
+uv run stockscan scorecard --send  # 텔레그램으로도 보낸다
+uv run stockscan serve             # 스케줄 + 알림 + 성적표 (상주, 화면 없음)
+uv run stockscan alert-test        # 알림 채널 확인 (토큰이 맞는지 지금 본다)
 ```
 
 - **저장소는 최상위로 평탄화됐다.** `backend/`는 없다. `cd`하지 않는다.
-- 환경변수 접두사는 **`MARKETSCAN_`**. `.env.example` 참조.
-- **사용자 자산은 전부 `~/.marketscan/`에 산다** — 설정(`config.yml`) · 전략 · DB
-  (`data/marketscan.db`) · 리포트(`reports/`). 저장소에는 코드와 예제만 둔다. `ohlcv_cache`가
+- 환경변수 접두사는 **`STOCKSCAN_`**. `.env.example` 참조.
+- **사용자 자산은 전부 `~/.stockscan/`에 산다** — 설정(`config.yml`) · 전략 · DB
+  (`data/stockscan.db`) · 리포트(`reports/`). 저장소에는 코드와 예제만 둔다. `ohlcv_cache`가
   저장소와 수명을 같이하면 안 되기 때문이다(규칙 16). **저장소 안으로 되돌리지 않는다.**
   경로 설정의 상대 경로는 모두 이 디렉터리 기준이고, `settings.resolve()`가 편다.
 - **전략은 그 설정 파일과 같은 디렉터리에서 찾는다.** 설정과 전략은 한 벌이라 통째로
   복사·백업할 수 있어야 한다. 저장소의 `sample/`은 그 한 벌의 **예제**다(정본이 아니다).
-- **알림 토큰은 `~/.marketscan/.env`에 둔다** (`MARKETSCAN_TELEGRAM_TOKEN`·`..._CHAT_ID`).
+- **알림 토큰은 `~/.stockscan/.env`에 둔다** (`STOCKSCAN_TELEGRAM_TOKEN`·`..._CHAT_ID`).
   `.env`는 실행 디렉터리와 `config_dir` 두 곳에서 읽는다 — 상대 경로만 두면 다른 데서
   `serve`를 띄웠을 때 토큰이 조용히 안 잡힌다. **`config.yml`에는 절대 넣지 않는다** (규칙 7).
 - **시세에는 자격 증명이 필요 없다** — 일봉 고정으로 무인증 소스만 쓴다
@@ -150,7 +150,7 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
    `assert_no_future(df, end, self.id)`를 호출한다. 미래 참조는 폴백으로 감추지 말고 그대로 터뜨린다.
 3. **전략의 `compute`는 인과적이어야 한다.** `rolling` · `ewm` · `shift(+n)`은 안전하고,
    **`shift(-n)` · `center=True` · `bfill`은 미래를 본다.** 백테스트 전체를 조용히 무너뜨리는
-   가장 흔한 경로다. `marketscan strategy check`가 AST로 잡지만 통과가 보장은 아니다 —
+   가장 흔한 경로다. `stockscan strategy check`가 AST로 잡지만 통과가 보장은 아니다 —
    사후 방어선은 난수 신호 테스트다.
 4. **필터는 `ohlcv`를 보존한 채 `items`만 걸러낸다.** DataFrame을 버리면 뒤에
    단계를 이어붙일 수 없다. 판단 근거는 `features`/`tags`에 남긴다.
@@ -162,7 +162,7 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
    서머타임 때문에 한국 기준 개장 시각이 1시간 움직인다.
 7. ⚠️ **이 규칙은 2026-08-06에 사용자 결정으로 뒤집혔다.** 텔레그램 토큰은 이제
    `config.yml`의 `telegram:`에 산다 — 파일 하나로 끝나는 쪽이 실제로 쓰기 쉽고,
-   이 파일은 저장소 바깥(`~/.marketscan/`)에 사는 개인 자산이기 때문이다.
+   이 파일은 저장소 바깥(`~/.stockscan/`)에 사는 개인 자산이기 때문이다.
    **대신 둘을 지킨다**: 저장소 예제에는 플레이스홀더만 두고, 실행 이력
    스냅샷에는 토큰을 **빼고** 남긴다(`AppConfig.snapshot()`). 환경변수는
    덮어쓰기 경로로 남아 있다.
@@ -222,7 +222,7 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
 
 **"이 전략이 돈이 되나?"(❌) → "내 구현이 안 틀렸나?"(✅)**
 
-`marketscan backtest <종목> --start D`가 그 도구다. 파라미터를 바꿔 가며 돌려 좋은 값을
+`stockscan backtest <종목> --start D`가 그 도구다. 파라미터를 바꿔 가며 돌려 좋은 값을
 고르는 순간 이 규범이 깨진다 — 그때부터 검증된 표준값이 아니라 **내가 고른 값**이 된다.
 
 - 지표 조합·파라미터를 백테스트로 뒤져 좋은 것을 찾지 않는다. 탐색 공간은 수백만인데
@@ -252,14 +252,14 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
 
 ## 새 전략을 추가할 때
 
-1. `marketscan strategy new <이름>` — `~/.marketscan/<이름>.py`에 템플릿이 생긴다.
+1. `stockscan strategy new <이름>` — `~/.stockscan/<이름>.py`에 템플릿이 생긴다.
    **파일 이름과 클래스의 `id`가 같아야 한다.** 로더가 강제한다 (해시가 파일 단위이므로).
    **파일 하나에 전략 하나.**
 2. `compute`(종목별 시계열) → `rank`(횡단면) → `select`(최종 컷) 순으로 채운다.
    **`rank`가 중심이다** — 단일 종목 전략이면 `compute`만 채우고 나머지는 기본 구현을 쓴다.
    기본 `rank`는 `score_feature`를 선언하면 순위·백분위·`universe_size`를 채워 준다.
 3. 파라미터는 `Params` Pydantic 모델로 선언한다. 폼·`--param` 플래그가 여기서 생성된다.
-4. **`compute`의 인과성을 확인한다** (규칙 3). `marketscan strategy check <이름>`.
+4. **`compute`의 인과성을 확인한다** (규칙 3). `stockscan strategy check <이름>`.
 5. 전략에 Provider·Cache 핸들을 주지 않는다. 이미 `end`로 잘린 DataFrame만 받는다.
 6. `startup_candles`를 선언한다 — 봉이 모자란 종목을 제외하는 기준이고, ★ **수집
    깊이(`lookback`)가 여기서 유도된다.** 이 값이 틀리면 그 종목이 조용히 전량 빠진다.
@@ -305,7 +305,7 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
 | `signals list`가 비어 있음 | `--commit` 없이 돌렸다. dry-run은 DB를 만들지도 않는다 |
 | 알림이 안 오는데 로그엔 '보냄' | 채널이 `log`다 — 텔레그램 토큰 미설정. 기록만 하고 아무 데도 안 보낸다 |
 | `전략을 찾을 수 없습니다` | 설정 파일만 옮기고 전략을 두고 왔다. 전략은 그 설정 파일 **옆**에서 찾는다 |
-| `설정 파일을 찾을 수 없습니다` | `~/.marketscan/config.yml`이 없다. `cp sample/* ~/.marketscan/` |
+| `설정 파일을 찾을 수 없습니다` | `~/.stockscan/config.yml`이 없다. `cp sample/* ~/.stockscan/` |
 | 어느 단계에서 0건이 됐는지 모르겠음 | `run --json`의 `nodes[].items`를 본다. 0종목을 수집한 단계도 상태는 `success`다 |
 | 테스트가 소스를 두드림 | `tests/conftest.py`가 `default_registry`를 synthetic으로 갈아 끼운다 |
 | `동적 유니버스는 백테스트에서 쓸 수 없습니다` | 의도된 차단이다 (규칙 14). `backtest`는 종목을 인자로 받는다 |
@@ -318,7 +318,7 @@ uv run marketscan alert-test        # 알림 채널 확인 (토큰이 맞는지 
 | `거래대금을 주지 않아 상위 N종목을 고를 수 없습니다` | 의도된 거부다. 컷 방식은 venue에서 유도된다(`config.uses_turnover`) |
 | `backtest` 차트가 특정 시점에 멈춤 | 규칙 18을 어겼다. 그 종목이 유니버스에서 빠지며 수집이 끊겼다 |
 | 리포트가 열리는데 차트만 안 보임 | 차트 라이브러리를 CDN으로 걸었다. vendoring해서 인라인한다 |
-| 캐시·신호가 갑자기 비어 보임 | `database_url()`이 `~/.marketscan` 기준으로 펴므로 `cd`는 무관하다. `MARKETSCAN_CONFIG_DIR`·`MARKETSCAN_DATABASE_URL`을 덮었는지 본다 |
+| 캐시·신호가 갑자기 비어 보임 | `database_url()`이 `~/.stockscan` 기준으로 펴므로 `cd`는 무관하다. `STOCKSCAN_CONFIG_DIR`·`STOCKSCAN_DATABASE_URL`을 덮었는지 본다 |
 | `DB 스키마가 모델보다 낡았습니다` | 모델에 컬럼을 더했는데 `create_all`이 기존 테이블을 못 고친다. **`ohlcv_cache`·`signals`는 자산이므로 지우기 전에 백업한다** |
 | 두 번째 실행이 여전히 느림 | 거래대금으로 자르는 venue(krx)는 마스터 캐시를 건너뛴다(의도). 거래대금은 캐시하면 안 된다 |
 | `알 수 없는 venue: 'upbit'` | 코인은 2026-08-06에 걷어냈다. 지원 목록은 `krx`·`nasdaq`·`nyse`다 |

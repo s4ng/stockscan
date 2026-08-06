@@ -294,7 +294,7 @@ def _add_notes(card: Scorecard, rows: list[SignalRow]) -> None:
     if all(h.excess_median is None for h in card.horizons):
         card.notes.append(
             "벤치마크가 없어 초과수익을 내지 못했습니다. "
-            "`marketscan ingest --commit`이 KOSPI·S&P500을 모읍니다."
+            "`stockscan ingest --commit`이 KOSPI·S&P500을 모읍니다."
         )
 
 
@@ -342,7 +342,7 @@ def render(card: Scorecard) -> str:
 
     숫자를 혼자 두지 않는다 — 승률 옆에는 기저율, 수익률 옆에는 초과수익.
     """
-    lines = [f"📊 marketscan 성적표 — 최근 {card.days}일", ""]
+    lines = [f"📊 stockscan 성적표 — 최근 {card.days}일", ""]
     lines.append(f"{card.strategy} · 신호 {card.signals}건 (채점 완료 {card.evaluated}건)")
 
     if not card.signals:

@@ -140,6 +140,6 @@ def test_naive_datetime_is_refused(tmp_path: Path):
 
 # ------------------------------------------------------------------------ 경로
 def test_sqlite_path_extraction():
-    assert sqlite_path("sqlite+aiosqlite:///./data/marketscan.db") == Path("./data/marketscan.db")
+    assert sqlite_path("sqlite+aiosqlite:///./data/stockscan.db") == Path("./data/stockscan.db")
     assert sqlite_path("sqlite+aiosqlite:///:memory:") is None
     assert sqlite_path("postgresql+asyncpg://localhost/db") is None

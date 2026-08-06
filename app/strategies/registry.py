@@ -1,6 +1,6 @@
 """전략 로더 + 소스 해시 (ARCHITECTURE.md 4.7).
 
-전략의 **정본은 `~/.marketscan/`의 파일**이다. IDE·git·리뷰를 쓸 수 있는
+전략의 **정본은 `~/.stockscan/`의 파일**이다. IDE·git·리뷰를 쓸 수 있는
 쪽이 실사용에 낫기 때문이다. 대신 파일이 되면서 구멍이 하나 생긴다 — 파이프라인이
 전략을 **이름으로만** 참조하면 파일을 고치는 순간 **과거 버전의 의미가 소급으로
 바뀐다.** "그때 그 신호가 어떤 전략에서 나왔는지"를 잃는 것이고, 그러면
@@ -23,7 +23,7 @@ from app.core.config import get_settings
 from app.strategies.base import Strategy, StrategyError
 
 #: 로드한 전략 모듈을 넣을 네임스페이스. 사용자 전략이 실제 패키지를 가리지 않게 격리한다.
-MODULE_NAMESPACE = "marketscan_user_strategies"
+MODULE_NAMESPACE = "stockscan_user_strategies"
 
 
 class StrategyNotFoundError(StrategyError):
@@ -72,7 +72,7 @@ def bind_config_dir(path: Path | None) -> None:
 def strategies_dir() -> Path:
     """전략을 찾을 디렉터리.
 
-    우선순위: 명시 설정(`MARKETSCAN_STRATEGIES_DIR`) → 활성 설정 파일의
+    우선순위: 명시 설정(`STOCKSCAN_STRATEGIES_DIR`) → 활성 설정 파일의
     디렉터리 → `config_dir`. 마지막 단이 있어야 파이프라인을 아직 읽지 않은
     명령(`strategy new` 등)도 갈 곳이 있다.
     """
@@ -108,7 +108,7 @@ def load_strategy(strategy_id: str, directory: Path | None = None) -> LoadedStra
         raise StrategyNotFoundError(
             f"전략을 찾을 수 없습니다: {strategy_id!r} ({path}). "
             f"사용 가능한 전략: {available}. "
-            f"새로 만들려면 `marketscan strategy new {strategy_id}`를 실행하세요."
+            f"새로 만들려면 `stockscan strategy new {strategy_id}`를 실행하세요."
         )
 
     cls = _load_class(path, strategy_id)
@@ -140,7 +140,7 @@ def _load_class(path: Path, strategy_id: str) -> type[Strategy]:
         del sys.modules[module_name]
         raise StrategyError(
             f"전략 파일을 불러오는 중 오류가 났습니다: {path}\n  {type(exc).__name__}: {exc}\n"
-            f"`marketscan strategy check {strategy_id}`로 먼저 정적 검사를 돌려 보세요."
+            f"`stockscan strategy check {strategy_id}`로 먼저 정적 검사를 돌려 보세요."
         ) from exc
 
     # 임포트해 온 다른 전략을 잡지 않도록 **이 모듈에서 정의된** 클래스만 본다.

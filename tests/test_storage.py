@@ -155,7 +155,7 @@ async def test_versions_are_never_overwritten(session):
 def test_sqlite_path_is_anchored_to_the_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path):
     """★ 상대 경로를 그대로 두면 DB가 **현재 디렉터리**를 따라간다.
 
-    `cd data && marketscan run`이 `data/data/marketscan.db`를 새로 만들고, 사용자는
+    `cd data && stockscan run`이 `data/data/stockscan.db`를 새로 만들고, 사용자는
     캐시와 신호가 통째로 비어 있는 것을 본다. 파일이 두 개 생겼다는 사실 자체가
     잘 안 보여서 진단이 어렵다.
 
@@ -166,15 +166,15 @@ def test_sqlite_path_is_anchored_to_the_config_dir(monkeypatch: pytest.MonkeyPat
 
     settings = get_settings()
     monkeypatch.setattr(settings, "config_dir", tmp_path / "home")
-    db.configure("sqlite+aiosqlite:///./data/marketscan.db")
+    db.configure("sqlite+aiosqlite:///./data/stockscan.db")
     try:
         monkeypatch.chdir(tmp_path)
         resolved = db.database_url()
     finally:
         db.configure(settings.database_url)
 
-    assert resolved.endswith((tmp_path / "home/data/marketscan.db").as_posix())
-    assert not resolved.endswith("./data/marketscan.db")  # cwd를 따라가지 않는다
+    assert resolved.endswith((tmp_path / "home/data/stockscan.db").as_posix())
+    assert not resolved.endswith("./data/stockscan.db")  # cwd를 따라가지 않는다
 
 
 def test_memory_and_absolute_urls_are_left_alone():
