@@ -29,9 +29,9 @@
 
 ### 1.1 목적
 
-**정해둔 전략으로 한국주식·미국주식을 훑어 후보를 리스트업하고, 그 신호가 실제로 어땠는지 채점하는 개인용 CLI.** 전략은 파이썬 클래스로 쓰고, 파이프라인은 그 전략을 데이터·알림과 엮는 얇은 배선이다.
+**정해둔 전략으로 한국·미국 주식을 매일 훑어 매수 후보를 뽑고 텔레그램으로 보내 주는 개인용 프로그램.** 전략은 파이썬 클래스로 쓰고, 파이프라인은 그 전략을 데이터·알림과 엮는 얇은 배선이다.
 
-★ **제품은 스크리닝이 아니라 채점이다** (2026-08-06). 스크리너 자체는 흔하다 — 다른 데 없는 것은 "내가 정한 규칙이 지난 6개월 실제로 어땠는가"와 "내가 무시한 신호가 나았는가"뿐이고, 그 재료(`signals` 전량 기록 · `ohlcv_cache` 영구 보관 · `acted`)는 이미 다 있다. **일일 알림은 제품이 아니라 원료다.**
+★ **알림이 자기 성적을 달고 나간다** (2026-08-06). 스크리너는 내버려 두면 자신감 기계가 된다 — 사람은 맞은 종목만 기억하기 때문이다. 그래서 낸 신호를 전부 기록하고 사후 수익률을 채워, 알림을 받는 순간 **"이걸 얼마나 믿어야 하나"**가 같이 오게 한다. 재료(`signals` 전량 기록 · `ohlcv_cache` 영구 보관 · `acted`)는 원래 다 있었고 계산만 없었다 (4.8).
 
 명령은 셋이다.
 
@@ -416,7 +416,7 @@ dry-run도 **읽는다.** 읽지 않으면 `run`과 `run --commit`이 서로 다
 
 **구현 (Phase 2)**
 
-노드는 `ctx.ohlcv.load(...)` 하나만 부른다. 뒤에는 캐시를 먼저 보는 `CachedSource`나 소스를 직접 부르는 `DirectSource`가 꽂힌다. `marketData`의 `cache` 파라미터가 `auto`(캐시 우선, 부족하면 소스) / `off`(항상 소스) / `only`(외부 호출 없음)를 고른다.
+파이프라인은 `ctx.ohlcv.load(...)` 하나만 부른다. 뒤에는 캐시를 먼저 보는 `CachedSource`나 소스를 직접 부르는 `DirectSource`가 꽂힌다. **정책은 상수다** — 캐시를 먼저 보고 요청 구간을 못 채우면 소스로 간다. 고를 이유가 없는 값이라 설정에서 뺐다 (6장).
 
 - ★ **dry-run도 캐시에 쓴다.** 규칙 11이 막는 것은 **되돌릴 수 없는 것** 셋이다 — 알림 발송,
   `signals` 기록, 봉 소비. 봉을 캐시에 넣는 것은 그중 어느 것도 아니다: 판단이 아니라
@@ -448,9 +448,9 @@ dry-run도 **읽는다.** 읽지 않으면 `run`과 `run --commit`이 서로 다
 
 ## 4. 실행 코어
 
-### 4.1 노드 간 데이터 모델 — `Bundle` / `Item`
+### 4.1 데이터 모델 — `Bundle` / `Item`
 
-노드 간 타입이 `DataFrame → Filtered List`로 바뀌면 필터를 두 개 이상 연결할 수 없다(두 번째가 받을 DataFrame이 없음). 모든 노드가 **같은 봉투(envelope)** 를 주고받는다.
+단계 간 타입이 `DataFrame → Filtered List`로 바뀌면 필터를 두 개 이상 이어붙일 수 없다(두 번째가 받을 DataFrame이 없음). 모든 단계가 **같은 봉투(envelope)** 를 주고받는다 (규칙 4).
 
 ```python
 @dataclass
@@ -471,42 +471,29 @@ class Bundle:
 
 **규칙**
 
-- 필터 노드는 `ohlcv`를 **보존한 채** `items`만 걸러내고 근거를 `features`/`tags`에 남긴다
+- 필터는 `ohlcv`를 **보존한 채** `items`만 걸러내고 근거를 `features`/`tags`에 남긴다 (규칙 4)
   → 필터 체이닝 가능 (규칙 4).
-- **빈 `Bundle`도 정상 출력이다.** 하위 노드는 빈 입력 시 no-op이고, 종료 코드도 `0`이다(12.3).
+- **빈 `Bundle`도 정상 출력이다.** 뒤 단계는 빈 입력 시 no-op이고, 종료 코드도 `0`이다(12.3).
 - 단일 심볼 전략과 다중 심볼 스크리너를 **같은 구조로** 표현한다. `len(items)`만 다르다.
 - ★ **`Bundle`은 곧 횡단면이다.** `items`가 여러 개인 상태가 예외가 아니라 **기본**이다.
   "한 시점의 유니버스 전체"가 하나의 `Bundle`이고 여기에 순위를 매기는 것이 1급 연산이므로,
-  **`rank` 계열 연산이 카탈로그의 중심에 있어야 한다**(5장).
+  **`rank`가 전략 인터페이스의 중심에 있는 이유다**(4.2).
 - **item의 식별 키는 `(instrument.key, timeframe)`이다.** 종목만으로 식별하면 Merge가 같은
   종목의 일봉 item과 시간봉 item 중 한쪽을 소리 없이 덮어쓴다.
-- ⚠️ **`Bundle.merge`는 `context`를 덮어쓴다.** items와 달리 합집합이 아니다. 같은 context 키를
-  쓰는 노드 둘을 한 노드에 물리면 앞엣것이 조용히 사라진다 — 이것이 `symbolUniverse`가
-  venue를 **목록으로** 받아야 하는 이유다(5장). 여기에 키별 예외를 넣지 않는다: context를
-  쓰는 노드가 늘 때마다 같은 고민이 반복된다.
+- ⚠️ **`Bundle.merge`는 `context`를 덮어쓴다.** items와 달리 합집합이 아니다. 예전에
+  시장마다 유니버스 노드를 두면 `context["universe"]`가 덮어써져 **두 시장이 소리 없이
+  사라졌다.** 지금은 유니버스가 설정 한 곳에서 나오므로(6장) 그 사고가 애초에 없다.
 - DataFrame은 프로세스 내 참조로 전달하고, 저장 시에는 요약만 기록한다.
 
-### 4.2 노드 인터페이스
-
-```python
-class BaseNode(ABC):
-    type: ClassVar[str]                     # "marketData"
-    ParamsModel: ClassVar[type[BaseModel]]
-    inputs / outputs: ClassVar[tuple[str, ...]]
-    requires_input: ClassVar[bool]          # False면 상류 없이도 실행된다
-    sends_external_messages: ClassVar[bool] # True면 엔진이 run에서 아예 실행하지 않는다 (12.2)
-
-    async def run(self, inputs: dict[str, Bundle],
-                  params: BaseModel, ctx: RunContext) -> dict[str, Bundle]: ...
-```
+### 4.2 실행 컨텍스트와 전략 인터페이스
 
 ```python
 @dataclass
 class RunContext:
     run_id: str
     mode: ExecutionMode             # backtest | shadow | notify | paper | live
-    now: datetime                   # ⚠️ 노드는 반드시 이 값만 사용. datetime.now() 금지
-    settings: PipelineSettings      # user_timezone · adjusted · max_concurrency …
+    now: datetime                   # ⚠️ 반드시 이 값만 사용. datetime.now() 금지 (규칙 1)
+    settings: RunSettings           # user_timezone · adjusted (사람이 정하는 건 타임존뿐)
     providers: ProviderRegistry
     calendars: dict[str, MarketCalendar]
     ohlcv: OhlcvSource              # 봉을 얻는 유일한 창구 (3.9)
@@ -516,15 +503,13 @@ class RunContext:
     log: NodeLogger
 ```
 
-`ctx.now` 강제가 **백테스트–실행 동치성의 핵심**이다. 백테스트는 이 값만 과거로 되돌려 같은 노드 코드를 재생한다.
+`ctx.now` 강제가 **백테스트–실행 동치성의 핵심**이다. 백테스트는 이 값만 과거로 되돌려 같은 코드를 재생한다.
 
-**★ 부작용 분기를 노드에 심지 않는다.** `--commit` 여부는 CLI가 `ctx.signals` 배출구를 갈아 끼우는 것으로 표현한다(`CollectingSink` ↔ `SqlSignalSink`). 노드마다 `if ctx.commit:`을 두면 언젠가 하나를 빠뜨리고, 그날 봉이 소리 없이 소비된다.
+**★ 부작용 분기를 단계에 심지 않는다.** `--commit` 여부는 CLI가 `ctx.signals` 배출구를 갈아 끼우는 것으로 표현한다(`CollectingSink` ↔ `SqlSignalSink`). 단계마다 `if ctx.commit:`을 두면 언젠가 하나를 빠뜨리고, 그날 봉이 소리 없이 소비된다.
 
 #### 전략 인터페이스 ★
 
-**v0.4는 전략을 지표 노드의 조합으로 표현했다. v0.5는 파이썬 클래스 하나로 표현한다.**
-
-노드 조합 방식은 "쓸 수 있는 모든 조건을 시스템이 미리 제공해야 한다"는 짐을 진다. 지표 × 파라미터 × 조합은 끝이 없고, 같은 접근을 택한 도구들이 지표 7~10개 수준에서 멈춰 있다. 그리고 이 시스템의 사용자는 **파이썬을 쓰는 본인 한 명**이다.
+**전략은 파이썬 클래스 하나다.** 지표를 조합 가능한 부품으로 쪼개면 "쓸 수 있는 모든 조건을 시스템이 미리 제공해야 한다"는 짐을 진다. 지표 × 파라미터 × 조합은 끝이 없고, 같은 접근을 택한 도구들이 지표 7~10개 수준에서 멈춰 있다. 그리고 이 시스템의 사용자는 **파이썬을 쓰는 본인 한 명**이다.
 
 ```python
 class Strategy(Protocol):
@@ -547,8 +532,8 @@ class Strategy(Protocol):
    4.8의 난수 신호 테스트가 사후 방어선으로 남는다.
 2. **전략에 Provider·Cache 핸들을 주지 않는다.** 이미 `end`로 잘린 DataFrame만 받으므로
    데이터를 통한 미래 참조가 구조적으로 불가능하다.
-3. **`Params`는 Pydantic 모델로 선언한다.** 노드 방식의 유일한 실질적 이득 — JSON Schema →
-   폼·`--param` 자동 생성 — 이 그대로 유지된다.
+3. **`Params`는 Pydantic 모델로 선언한다.** ★ **여기가 파라미터의 정본이다** — 설정 파일에
+   값을 적는 자리가 없다(6장). 값이 "왜 이 값인가"를 적은 docstring 옆에 있어야 한다 (4.8).
 4. **`rank` / `select`는 기본 구현을 제공한다.** 단일 종목 전략은 `compute`만 채우면 된다.
 5. **컷은 `top_n` / `top_pct` 헬퍼를 쓴다** — 절삭 경고가 함께 남는다 (조용한 절삭 금지).
 6. ★ **랭킹·백분위·컷은 시장(market) 안에서만 한다.** 아래 참조.
@@ -571,7 +556,7 @@ class Strategy(Protocol):
 - 대안인 "시장 내 z-score 후 통합 랭킹"은 **미국의 +2σ와 KRX의 +2σ가 같은 의미인가**라는 가정을
   새로 들여온다. **가정이 적은 쪽을 택한다.**
 - ⚠️ **그룹 키는 `venue`가 아니라 시장이다.** `nasdaq`과 `nyse`는 같은 통화·같은 캘린더·같은
-  분포라 나눌 이유가 없다. `pipeline_file.MARKETS`(krx / us)가 이미 그 그룹을 갖고 있다.
+  분포라 나눌 이유가 없다. `VenueSpec.market`(krx / us)이 그 그룹의 단일 출처다.
 - ⚠️ **이 규칙은 코인을 걷어낸 뒤에도 그대로다.** 코인이 가장 극적인 사례였을 뿐, 원인은
   "분산이 다른 집단을 한 줄로 세우는 것"이고 그건 한국·미국 사이에도 있다.
 - `features`에 **어느 풀에서 매긴 순위인지**를 함께 남겨야 `explain`이 계속 정직하다.
@@ -630,12 +615,12 @@ dedup_key = sha256(pipeline_id | node_id | instrument.key | as_of | signal_kind)
 ```
 
 - `signals` · `alerts_sent`의 `dedup_key`에 UNIQUE → 같은 캔들 기준 신호·알림은 **한 번만**.
-- **Cooldown 노드**: "같은 종목은 N시간 내 재알림 금지" 같은 완화 조건도 별도 제공.
+- **Cooldown**: "같은 종목은 N시간 내 재알림 금지" 같은 완화 조건 (⬜ 아직 없다).
 - Phase 5에서 이 키 스킴이 그대로 `orders.idempotency_key`가 된다 (`| side` 추가).
 
 ### 4.6 자격 증명
 
-키를 **파이프라인 정의에 직접 넣지 않는다** (export·공유 시 유출). 노드는 Connection ID만 참조한다(규칙 7).
+⚠️ **2026-08-06에 사용자 결정으로 뒤집혔다** — 텔레그램 토큰은 `config.yml`의 `telegram:`에 산다(8장). 대신 저장소 예제에는 플레이스홀더만 두고, **실행 이력 스냅샷에서는 뺀다**(`AppConfig.snapshot()`). 환경변수가 덮어쓰기 경로로 남아 있다.
 
 - `connections` 테이블에 암호화 저장. 마스터 키는 환경변수 / OS 키체인.
 - 로그·`node_runs` 저장 시 키 패턴 자동 마스킹. `SecretStr`로 실수 노출 방지.
@@ -650,7 +635,7 @@ SQLite + **WAL 모드**. SQLAlchemy를 써서 SQLite 전용 문법을 피한다 
 | :--- | :---: | :--- |
 | `pipelines` / `pipeline_versions` | ✅ | 메타 / DAG 스냅샷 **(불변)**. 실행은 항상 특정 버전 참조 |
 | `strategy_versions` | ✅ | **전략 소스 해시 + 전문 스냅샷**. 아래 참조 |
-| `runs` / `node_runs` | ✅ | 실행 단위 / 노드별 입·출력 요약·로그·에러 |
+| `runs` / `node_runs` | ✅ | 실행 단위 / **단계별** 입·출력 요약·로그·에러. ⚠️ 테이블 이름은 그대로다 — `explain`이 읽으므로 바꾸면 과거 실행을 되짚지 못한다 |
 | `signals` | ✅ | 생성된 신호 + `dedup_key` UNIQUE + `acted`(오버라이드 추적) |
 | `bar_state` | ✅ | Fresh Bar Gate의 직전 `as_of` (3.5). DDL이 `bar_state.py`에 있다 — 아래 참조 |
 | `ohlcv_cache` | ✅ | **데이터 자산.** 아래 참조 |
@@ -665,7 +650,7 @@ SQLite + **WAL 모드**. SQLAlchemy를 써서 SQLite 전용 문법을 피한다 
 
 > **`bar_state`만 SQLAlchemy가 아니라 `sqlite3`을 직접 쓴다.** `BarStateStore` 프로토콜의
 > 메서드가 동기인데(엔진이 `execute()` 한복판에서 `commit()`을 부른다) async로 바꾸면
-> 프로토콜·노드·러너가 줄줄이 딸려 온다. 반대로 이 테이블은 키 하나에 시각 하나뿐이라 ORM이
+> 프로토콜·러너가 줄줄이 딸려 온다. 반대로 이 테이블은 키 하나에 시각 하나뿐이라 ORM이
 > 줄 것이 없다. 컬럼 표현이 두 곳에 생기면 언젠가 어긋나고, 어긋난 날 Fresh Bar Gate가
 > **조용히** 무동작이 되므로 DDL도 같은 파일에 둔다.
 
@@ -695,7 +680,7 @@ PK: (venue, symbol, timeframe, adjusted, bar_time)
 | 마스터 | 심볼 · 이름 · 목록 순서 | ✅ 하루 이틀 낡아도 무해 |
 | 거래대금 | `Amount` · `quoteVolume` | ❌ **그날의 유니버스가 바뀐다** |
 
-거래대금을 캐시하면 **어제의 상위 60종목을 오늘 훑게 된다.** 성능 문제가 아니라 판단이 달라지는 문제다. 그래서 `top_by_turnover`를 거는 venue는 캐시를 건너뛰고 매번 받는다(`needs_turnover=True`). 실익이 있는 것은 거래대금이 없는 목록뿐인데, 그게 정확히 가장 무거운 호출이라 이득의 대부분이 거기 있다.
+거래대금을 캐시하면 **어제의 상위 60종목을 오늘 훑게 된다.** 성능 문제가 아니라 판단이 달라지는 문제다. 그래서 거래대금으로 자르는 venue는 캐시를 건너뛰고 매번 받는다(`needs_turnover=True`). 실익이 있는 것은 거래대금이 없는 목록뿐인데, 그게 정확히 가장 무거운 호출이라 이득의 대부분이 거기 있다.
 
 - **venue 단위로 통째로 갈아 끼운다.** 목록은 언제나 "지금"의 전량 스냅샷이라 부분
   갱신으로는 사라진 종목을 알 수 없고, 남아 있으면 없는 종목을 계속 훑게 된다.
@@ -770,11 +755,11 @@ for bar_time in calendar.bars(start, end, timeframe):   # timeframe ∈ {1d, 1w}
 
 **이 시스템에서 가장 확실한 가치가 여기서 나온다** — 개인 투자자가 이 숫자를 보는 일이 거의 없기 때문이다.
 
-**⚠️ LLM 노드가 있는 파이프라인의 백테스트는 낙관 편향된다**
+**⚠️ LLM이 낀 백테스트는 낙관 편향된다** (Phase 4 동결 중이지만 선을 미리 긋는다)
 
 `llm_cache`는 **재실행 결정성**만 보장할 뿐 학습 데이터 누출은 못 막는다. 2023년 캔들을 2026년 모델에게 물으면, 그 모델은 이미 해당 종목의 후속 주가를 학습했을 수 있다. Provider의 `end` 컷은 **가격 데이터만** 보므로 이걸 못 잡는다.
 
-- LLM 노드가 포함된 백테스트 결과에 **경고 배지**를 붙인다.
+- LLM이 포함된 백테스트 결과에 **경고 배지**를 붙인다.
 - **LLM 전략의 1급 검증 경로는 `shadow` 모드다.** 백테스트는 참고 수단으로 격하한다.
 
 **⚠️ 유니버스는 백테스트에서 point-in-time으로 산출한다**
@@ -828,182 +813,118 @@ features[종목 × 날짜 × 피처]   ← groupby(종목).rolling() 등으로 �
 > 이건 LLM 호출을 허용했기 때문에 **오히려 가능해진 안전장치**다. 카운터가 출력되면
 > 에이전트가 그것을 읽고 스스로 멈출 근거가 생긴다.
 
-**shadow 모드** — 파이프라인을 실시간으로 돌리되 **알림을 보내지 않고 `signals`에만 기록**한다. 용도는 셋: ① LLM 노드의 1급 검증 경로(학습 누출은 shadow로만 잡힌다) ② 실전 투입 전 관찰 기간 ③ 구현 검증(백테스트와 shadow의 신호가 어긋나면 둘 중 하나가 틀린 것).
+**shadow 모드** — 파이프라인을 실시간으로 돌리되 **알림을 보내지 않고 `signals`에만 기록**한다. 용도는 셋: ① LLM의 1급 검증 경로(학습 누출은 shadow로만 잡힌다) ② 실전 투입 전 관찰 기간 ③ 구현 검증(백테스트와 shadow의 신호가 어긋나면 둘 중 하나가 틀린 것).
 
 ### 4.9 관측성
 
 - 실행 진행은 **stdout으로 출력**한다 (`--json`이면 stderr). 하루 3회 도는 배치에 실시간
   스트리밍은 필요 없다.
 - `node_runs`의 입출력 스냅샷으로 **"왜 이 신호가 나왔는가"를 사후 재현**한다.
-- **전략 노드는 `rank` 결과 상위 N개의 점수·순위를 `node_runs`에 남긴다.** 전략이 한 덩어리가
-  되면서 중간 판단이 노드 경계에 드러나지 않으므로, 이 스냅샷이 없으면 "왜 이 종목이
+- **전략 단계는 `rank` 결과 상위 N개의 점수·순위를 `node_runs`에 남긴다.** 전략이 한
+  덩어리라 중간 판단이 밖으로 드러나지 않으므로, 이 스냅샷이 없으면 "왜 이 종목이
   뽑혔는가"를 잃는다.
-- **0종목을 수집한 노드도 상태는 `success`다.** 어느 노드에서 0이 됐는지는 상태가 아니라
+- **0종목을 수집한 단계도 상태는 `success`다.** 어느 단계에서 0이 됐는지는 상태가 아니라
   `nodes[].items`가 답한다.
 
 ---
 
-## 5. 노드 카탈로그
+## 5. 파이프라인 단계
 
-**Indicator 범주는 동결이고 Strategy 범주가 중심이다.** 노드는 "전략을 조립하는 블록"이 아니라 **"데이터 → 전략 → LLM → 알림"을 잇는 배선**이다. 지표 조건이 필요하면 노드가 아니라 전략 클래스에 넣는다.
+**노드 카탈로그는 없다** (2026-08-06). 조합이 언제나 하나였으므로 조합을 표현하는
+장치를 걷어냈다 (4.3). `app/pipeline.py`가 위에서 아래로 읽히는 함수 하나다.
 
-| 범주 | 노드 | 상태 | 주요 파라미터 |
-| :--- | :--- | :---: | :--- |
-| **Trigger** | Manual Trigger | ✅ | — |
-| | Schedule Trigger | ⬜ P3 | `serve`가 읽는다 (8장). cron 식, `after_close` 등 실행 조건 |
-| **Input** | Symbol Universe | ✅ | 고정 목록 / 거래소 조회(거래대금 상위 N). ★ **동적 유니버스는 backtest에서 하드 차단** |
-| | Market Data | ✅ | timeframe(`1d`/`1w`), lookback, closed_only, **skip_stale**, source, **cache** |
-| **Strategy** ★ | **Strategy Runner** | ✅ | `strategy_id` + 전략의 `Params`. `compute` → `rank` → `select` |
-| **AI** | **LLM Screen** | ⬜ P4 | provider, model, 프롬프트, 출력 스키마, 캐시 정책. **정성 정보 필터** |
-| **Logic** | Condition Splitter | ✅ | 조건식 |
-| | Merge / Rank·Percentile / Sort·Limit / Alert Cooldown | ⬜ | 전략 밖에서 점수를 합치거나 알림 폭주를 막을 때 |
-| **Action** | Log Alert / Persist Signal | ✅ | 바깥으로 나가지 않는다 |
-| | Telegram Alert | ⬜ P3 | **`sends_external_messages = True`라 `run`에서는 실행되지 않는다.** `serve`만 켠다 (12.2) |
-| | Forward Return Evaluator | ⬜ P3 | `signals` 기록 후 N봉 뒤 수익률을 소급 채운다. **4.8 신호 품질 지표의 산출원**이자 `review`를 없앤 뒤 남은 유일한 사후 검증 재료. 캐시가 있어 외부 호출이 필요 없다 |
-| | *Broker Order* | ⬜ P5 | RiskGuard 필수 |
+| 단계 | 하는 일 | 스냅샷 id |
+| :--- | :--- | :--- |
+| 전략 로드 | 소스 해시를 박는다 (4.7). 실패해도 흔적이 남아야 어디서 끊겼는지 안다 | `load` |
+| 유니버스 | venue별 컷. ★ **backtest에서 거부** (아래) | `universe` |
+| 봉 수집 | `closed_only` + Fresh Bar Gate. 깊이는 전략에서 유도 | `data` |
+| 전략 | `compute` → `rank` → `select` (`strategies/stages.py`가 단일 출처) | `strategy` |
+| 기록 | `ctx.signals` 배출구가 부작용을 정한다 (규칙 11) | `persist` |
+| 로그 | 사람이 읽는 한 줄. **바깥으로 나가지 않는다** | `log` |
 
-> `maFilter`는 **동결한다** — 단순 조건의 예시이자 `Bundle` 계약의 참조 구현으로 값이 있다.
-> 다만 **Indicator 범주에 새 노드를 추가하지 않는다.** 이 선을 긋지 않으면 두 방식이 공존하다
-> 노드 쪽이 썩는다.
->
-> ⚠️ **계기판: `Strategy Runner`가 아닌 노드의 개수.** 배선용 노드가 계속 늘어난다면
-> 파이프라인이 다시 전략을 표현하려 드는 것이다.
+스냅샷 id는 `node_runs` 테이블에 그대로 들어간다 — 이름을 바꾸면 `explain`이 과거
+실행을 되짚지 못한다 (4.9).
 
-**Symbol Universe — AST 검사가 잡지 못하는 look-ahead** ★
+> ⚠️ **계기판: 단계가 계속 늘어나면** 파이프라인이 다시 전략을 표현하려 드는 것이다.
+> 그리고 **분기가 생기면** DAG가 필요했던 이유가 돌아온 것이니 그때 다시 판단한다.
 
-거래소가 주는 종목 목록은 언제나 **"지금"** 이다(4.8 서바이버십). **이 경로는 `strategy check`가 잡지 못한다** — 전략 코드는 완전히 인과적이고 미래 참조는 유니버스 쪽에 있기 때문이다. AST에 흔적이 남지 않으므로 **차단을 노드가 명시적으로 맡는다**(규칙 14).
+**유니버스 — AST 검사가 잡지 못하는 look-ahead** ★
 
-- `venue`가 지정된 Symbol Universe는 `backtest` 모드에서 **거부**한다.
-- 산출 근거(`venue` · `top_by_turnover` · `point_in_time`)를 `Bundle.context`에 실어
-  `node_runs`에 남긴다 — "그날 왜 이 종목들이었나"가 사후에 복원되어야 한다.
-- Phase 3에서 point-in-time 스냅샷이 생기면 그때 backtest 경로가 열린다.
+소스가 주는 종목 목록은 언제나 **"지금"** 이다(4.8 서바이버십). **이 경로는
+`strategy check`가 잡지 못한다** — 전략 코드는 완전히 인과적이고 미래 참조는 유니버스
+쪽에 있기 때문이다. AST에 흔적이 남지 않으므로 **차단을 파이프라인이 명시적으로 맡는다**
+(규칙 14).
 
-산출물은 items가 아니라 **`context["universe"]`의 심볼 목록**이다. 봉을 받기 전이라 `Item`을 만들 수 없다 — `as_of`는 Market Data가 캘린더로 판정하기 전까지 존재하지 않고, **없는 `as_of`를 지어내면 그 거짓말이 신호까지 따라간다.**
+- 동적 유니버스는 `backtest` 모드에서 **거부**한다. 조용히 고정 목록으로 물러서지
+  않는다 — 그러면 사용자가 적지 않은 유니버스로 백테스트가 돌아간다.
+- 산출 근거(venue · 컷 · 소스)를 `node_runs`에 남긴다 — "그날 왜 이 종목들이었나"가
+  사후에 복원되어야 한다.
 
-**★ `venue`를 목록으로 받는다 — 노드는 하나다**
+**앞으로 붙을 것**
 
-시장마다 노드를 만들어 `marketData` 하나에 물리면 `Bundle.merge`가 `context["universe"]`를 덮어써 **두 시장이 소리 없이 사라진다**(4.1). items는 제대로 합쳐지므로 겉보기에는 정상이다. 노드 하나가 여러 venue를 처리하면 이 문제가 애초에 생기지 않는다.
-
-```yaml
-venues:                                              # 단수 `venue:`도 계속 받는다
-  - { venue: krx,   top_by_turnover: 200 }
-  - { venue: nasdaq, limit: 100 }
-```
-
-- **원소가 문자열이 아니라 조건 묶음**인 이유는 venue마다 필요한 컷이 다르기 때문이다 —
-  KRX 목록은 거래대금을 주지만 미국 목록에는 아예 없다.
-- **유동성 컷은 venue별로 따로 건다**(3.7). 섞어 자르면 거래대금 단위가 달라 비교가 성립하지 않는다.
-- ⚠️ **거래대금을 주지 않는 소스에 `top_by_turnover`를 걸면 거부한다.** 경고만 남기고 빈
-  목록을 돌려주면 **그 시장이 통째로 사라진 채 실행이 성공한다.** 대안은 `limit`인데,
-  그건 **소스가 준 순서**에 기대는 절삭이라 그 사실을 로그에 적는다.
-- **목록 조회 소스는 능력(`provides_universe`)으로 고른다.** 라우팅 표는 시세의 우선순위라,
-  이 필터가 없으면 `krx: pykrx→fdr`에서 앞의 pykrx가 목록을 못 준다는 이유로 유니버스가
-  통째로 실패한다 — fdr이 줄 수 있는데도. 능력으로 고르는 것은 폴백이 아니다(3.4).
-- `--market` 필터는 이 `venues` 목록도 함께 거른다. 고정 목록만 걸러서는 **필터가 있다는
-  사실이 오히려 오해를 만든다.**
-- `Bundle.merge`에 키별 예외를 넣는 방식은 **택하지 않았다.** context를 쓰는 노드가 늘 때마다
-  같은 고민이 반복된다.
-
-**LLM Screen — 가격 예측기가 아니다** ★
-
-LLM이 캔들을 보고 가격을 예측한다는 근거는 없고, 학습 데이터 누출 때문에 검증도 불가능하다. **그러나 정성 정보 필터로는 다르다.**
-
-숫자 스크리닝의 최대 위험은 **"지표는 좋은데 사실 위험한 회사"** 다. PBR 0.3에 ROE 15%인데 관리종목이거나, 감사의견 한정이거나, 유상증자를 앞두고 있거나, 횡령·배임 공시가 떴거나. 가격 데이터로 못 거르고, 사람이 매일 수백 종목의 공시를 읽을 수도 없다.
-
-```
-숫자 스크리너 → 후보 30종목 → LLM이 공시·뉴스를 읽고 지뢰 제거 → 5종목 → 사람 검토
-```
-
-- **수익 기여 경로가 알파 생성이 아니라 손실 회피다.** 소형주 스크리닝에서는 이쪽이 더 크다.
-- **비용상 반드시 필터 뒤에 배치한다.**
-- ★ **판단 보류를 1급 출력으로 둔다.** 출력 스키마에 `abstain` / `confidence`를 넣고 임계
-  미달이면 신호를 죽이는 것을 **기본값**으로 한다. 점수만 받고 신뢰도를 안 받으면 모델이
-  헛소리를 하는 중인지 알 방법이 없다 (FreqAI의 `do_predict`·DI와 같은 장치).
-
-**LLM Provider의 세 종류 — 결정성 보증이 다르다** ★
-
-| 구현 | 예 | `deterministic` | 백테스트 |
-| :--- | :--- | :---: | :---: |
-| `ApiProvider` | Anthropic · OpenAI (`temperature=0`) | ✅ | 허용\* |
-| `CommandProvider` | `claude -p …` — **도구 사용 끔** | ✅ | 허용\* — **API 키 불필요** |
-| `CommandProvider` | 위와 같으나 **도구 사용 켬** | ❌ | **거부** |
-| `LocalModelProvider` | ollama 등 | ✅ | 허용\* |
-
-\* 학습 데이터 누출 경고 배지는 그대로 유지된다.
-
-agent 호출을 넣는 이유는 둘이다 — **비밀이 하나 더 사라지고**(시세는 이미 무인증이므로 남는 것은 텔레그램 토큰뿐), **agent는 컨텍스트를 스스로 가져온다**(이 노드의 용도가 공시·뉴스 읽기인데 미리 채운 프롬프트보다 직접 찾아 읽는 쪽이 명백히 유리하다).
-
-**대신 두 가지를 강제한다.**
-
-1. ⚠️ **백테스트에서 도구 사용 agent는 하드 차단.** 2023년 `bar_time`으로 리플레이하는데 agent가
-   실시간 웹을 읽으면 **2026년 정보를 본다.** 학습 누출보다 나쁘다 — 그건 기억이지만 이건
-   실제 미래 데이터다.
-2. ⚠️ **`cacheable=False`면 `llm_cache`를 쓰지 않는다.** 캐시 키는 `(model, prompt_hash,
-   input_digest)`인데 agent가 웹을 뒤지면 **실제 입력이 프롬프트 해시에 안 잡힌다.** 그대로
-   캐시하면 낡은 답을 정답인 척 돌려주게 된다.
-
-**구조화 출력**은 API처럼 스키마로 강제할 수 없으므로 텍스트를 Pydantic으로 검증하고, 실패하면 1회 재시도 후 **`abstain`으로 떨군다.** **보안** — 공시 텍스트를 프롬프트에 넣어 셸을 호출하므로 문자열 보간이 아니라 **argv 배열이나 stdin으로 전달**한다.
+| | 언제 | 비고 |
+| :--- | :--- | :--- |
+| LLM Screen | ❄️ Phase 4 동결 | 성적표가 6개월치 숫자를 낸 뒤 (9장) |
+| Broker Order | Phase 5 | RiskGuard 필수 (규칙 9) |
 
 ---
 
-## 6. 파이프라인 정의 스키마
+## 6. 설정 스키마
 
-**형식은 YAML로 확정됐다** (11장 4번). 손으로 적어 보니 JSON의 문제는 구조가 아니라 **주석을 달 수 없다는 것**이었다 — 파이프라인 파일에 적고 싶은 것의 절반은 "왜 이 종목인가" · "왜 이 값인가"다. 스키마는 그대로고 로더가 확장자로 갈라 받으므로 `.json`도 계속 읽힌다. `pipeline_versions`의 스냅샷은 **직렬화이므로 JSON을 유지**한다.
+**사람이 정하는 것은 넷뿐이다** (2026-08-06). 예전에는 노드 6개와 엣지 5개를 적는
+DAG 정의였는데, **만들어지는 조합이 언제나 하나**라 그 형식이 값을 못 했다 — 설정
+파일 두 개가 똑같은 배선을 갖고 있었고 다른 것은 전략 하나였다.
 
 ```yaml
-pipeline_id: pipe_krx_momentum
-version: 1
-name: KRX 횡단면 모멘텀 12-1
+timezone: Asia/Seoul
 
-settings:
-  user_timezone: Asia/Seoul
-  default_mode: notify        # backtest | shadow | notify | paper | live
-  adjusted: true              # 전역 고정. 캐시 키에 들어간다 (3.8)
-  max_concurrency: 4
+universe:                # venue → 훑을 종목 수
+  krx: 200
+  nasdaq: 100
 
-nodes:
-  - id: universe
-    type: symbolUniverse
-    params: { venue: krx, top_by_turnover: 200 }
-    on_error: { policy: retry, max_attempts: 3, fallback: fail }
+strategy: trend_breakout_55
 
-  - id: data
-    type: marketData
-    params:                    # instruments를 비우면 상류 universe를 쓴다
-      timeframe: 1d
-      lookback: 320            # startup_candles(273)보다 커야 한다
-      closed_only: true
-      skip_stale: true
-      source: auto
-      cache: auto
+schedule:
+  at: ["15:40", "06:10"]   # 로컬 기준. 시장을 나누지 않는다
+  heartbeat: "09:00"       # 신호 0건이어도 하루 1회 (8장)
+  scorecard_day: 1         # ★ 매월 성적표 (4.8)
 
-  - id: strategy
-    type: strategyRunner
-    params:
-      strategy_id: cross_momentum_12_1
-      strategy_sha256: 9f2c…   # 다르면 경고 (4.7)
-      params: { lookback: 252, skip: 21, top_pct: 0.2 }
-
-  - id: persist
-    type: persistSignal
-
-edges:
-  - { id: e1, source: universe, target: data }
-  - { id: e2, source: data,     target: strategy }
-  - { id: e3, source: strategy, target: persist }
+telegram:
+  token: "<봇 토큰>"
+  chat_id: "<채팅 ID>"
 ```
 
-- 엣지는 `source_handle` / `target_handle`(기본 `main`)로 분기를 표현한다. `on_error: route`면
-  `error` 핸들이 암묵적으로 생긴다 (4.3).
-- **그래프가 거의 직선이다.** 분기는 LLM 판정과 에러 라우팅뿐이다 — **이것이 캔버스를 버린
-  이유이자 DAG 엔진을 남겨 둔 이유**이기도 하다 (분기와 팬아웃은 여전히 그래프이므로).
-- v0.4의 `position`(캔버스 좌표)은 사라졌다. 예전 정의에 남아 있어도 무시된다.
+**나머지는 유도하거나 상수다.**
+
+| 사라진 것 | 어디로 |
+| :--- | :--- |
+| `nodes` · `edges` · `pipeline_id` · `name` · `version` | 코드에 고정. `pipeline_id`는 전략에서 유도 |
+| `timeframe` · `closed_only` · `skip_stale` · `source` · `cache` · `adjusted` | 상수. 판단 단위는 `1d`뿐이라 설정할 자리가 없다 (3.6 / 규칙 12) |
+| **`lookback`** | ★ 전략의 `startup_candles`에서 유도 |
+| **전략 `params`** | ★ 전략 파일의 `Params` 기본값이 정본 |
+| `top_by_turnover` vs `limit` | 소스의 능력에서 유도 (`config.uses_turnover`) |
+| `at[].market` | 없앴다 — Fresh Bar Gate가 어차피 거른다 (3.5) |
+| `on_error` | 유니버스 조회에만 재시도. 실패의 무게가 다르다 (4.3) |
+
+★ **`lookback` 유도가 특히 중요하다.** 예전에는 `lookback: 320`을 손으로 적고 옆에
+"전략이 253봉을 요구합니다"라고 주석을 달았는데, **전략을 바꾸면 그 둘이 어긋나고
+어긋난 종목은 워밍업 부족으로 조용히 전량 제외됐다.** "전략이 있는데 신호가 0건"이
+가장 흔한 사고였던 이유가 이것이다.
+
+★ **파라미터가 설정에서 사라진 것도 의도다** (4.8). 값이 전략 파일 안에 있으면 "왜 이
+값인가"를 적은 docstring 바로 옆에 놓이고, **설정에서 슬쩍 바꿔 돌려 보는 경로가
+없어진다.** 파라미터를 바꾸는 것은 전략을 고치는 일이어야 한다.
+
+**`pipeline_versions`의 스냅샷은 JSON이다** — 사람이 적는 형식이 아니라 직렬화이고,
+저장된 버전은 불변이어야 하므로 표현이 흔들리면 안 된다 (규칙 10). ⚠️ **토큰은 빼고
+남긴다** — 실행 이력은 백업·공유 대상이다.
 
 ---
 
 ## 7. 디렉터리 구조
 
 **`backend/` 와 `frontend/` 구분이 없다.** 프론트가 없으면 "백엔드"라는 이름도 의미가 없다.
+**`app/nodes/`도 없다** — DAG 엔진과 함께 걷어냈다 (4.3).
 
 **저장소에는 코드와 예제만 있다.** 사용자 자산은 전부 `~/.marketscan/`에 있다.
 
@@ -1019,24 +940,32 @@ marketscan/
 ├── pyproject.toml · uv.lock       # ★ Docker를 대신하는 재현성 장치
 ├── sample/                        # 설정·전략 예제 한 벌 (6장). ~/.marketscan/으로 복사해 쓴다
 ├── app/
-│   ├── cli/          main.py · output.py(종료 코드·--json) · pipeline_file.py
-│   ├── engine/       types.py(Item·Bundle) · context.py · graph.py · runner.py
-│   │                 signals.py(배출구) · state.py(Fresh Bar Gate) · expr.py · template.py
+│   ├── config.py     ★ 설정 (6장). 사람이 적는 것 전부 — 나머지는 유도하거나 상수
+│   ├── pipeline.py   ★ 유니버스 → 봉 → 전략 → 기록 → 로그 (4.3). 함수 하나
+│   ├── evaluate.py   사후 수익률 (4.8). **캐시만 읽는다**
+│   ├── scorecard.py  ★ 성적표 = 제품 (4.8)
+│   ├── benchmark.py  KOSPI · S&P500 — 승률을 해석할 기준선
+│   ├── service.py    ★ 명령의 본체. CLI도 스케줄러도 여기를 지난다
+│   ├── serve.py      상주 루프 — 발화·알림·하트비트·ack 수거·월간 성적표 (8장)
+│   ├── schedule.py   "다음 발화가 언제인가" — 계산만, 잠들지 않는다
+│   ├── alerts.py     텔레그램 — 나가는 것과 [샀다/안 샀다] 응답
+│   ├── cli/          main.py · output.py(종료 코드·--json)
+│   ├── engine/       types.py(Item·Bundle) · context.py(RunContext·ExecutionMode)
+│   │                 signals.py(배출구) · state.py(Fresh Bar Gate)
 │   ├── market/       instrument.py(InstrumentRef·VenueSpec.market) · calendar.py · timeframe.py
 │   ├── providers/    base.py · registry.py(라우팅·폴백)
 │   │                 ohlcv_source.py(봉 캐시 계층) · universe_source.py(마스터 캐시 계층)
 │   │                 pykrx · yfinance · fdr · synthetic
 │   ├── ingest/       worker.py — 수집 대상 도출·수집 (3.9)
-│   ├── nodes/        registry.py + triggers/ inputs/ strategy/ logic/ actions/ indicators/(동결)
 │   ├── strategies/   base.py(Protocol·시장별 rank) · registry.py(로더·해시) · check.py(AST)
-│   ├── storage/      models.py · db.py(스키마 드리프트 검사) · repository.py · history.py
+│   │                 stages.py — compute→rank→select의 단일 출처
+│   ├── storage/      models.py · db.py(스키마 넓히기) · repository.py · history.py
 │   │                 ohlcv_cache.py · instruments.py(심볼 마스터) · bar_state.py
 │   ├── report/       run_report.py(실행 1회·표만) · backtest_report.py(★ 차트·마커)
 │   │                 vendor/ — lightweight-charts standalone + LICENSE (2.1)
 │   ├── backtest/     replay.py — 날짜별 리플레이 (12.7)
-│   ├── service.py    ★ 명령의 본체. CLI도 웹도 여기를 지난다
-│   └── core/         config.py · formatting.py(가격·시각 표기의 단일 출처)
-└── tests/
+│   └── core/         config.py(경로) · formatting.py(가격·시각 표기의 단일 출처)
+└── tests/            test_pipeline · test_evaluate · test_honesty(★ 엔진 정직성) …
 ```
 
 **`run_report`에는 차트를 붙이지 않는다.** 실행 1회 리포트는 "방금 뭐가 나왔나"라 표로 충분하고, 여기까지 라이브러리를 얹으면 dry-run 스무 번에 `latest.html`이 200KB씩 무거워진다. **차트는 `backtest`만.**
@@ -1046,7 +975,7 @@ marketscan/
   다시 받아도 살아남아야 하는 것이 저장소 안에 있으면 언젠가 함께 지워진다.
 - **`~/.marketscan/`만 사용자 자산이다.** 통째로 백업 대상이다. 저장소 쪽에는 지우면 곤란한
   것이 하나도 없다 — `sample/`은 예제라 지워도 되고, `reports/`는 재생성 가능하다.
-- ⬜ 아직 없는 것: `app/backtest/`(P3) · `app/nodes/ai/`(P4) · `app/risk/`(P5).
+- ⬜ 아직 없는 것: `app/llm/`(P4 동결) · `app/risk/`(P5).
 
 ---
 
@@ -1063,10 +992,10 @@ marketscan describe        # 설치 확인
 **자동 실행은 `serve`로 확정했다.** 시장별 마감 뒤에 아래가 일어난다.
 
 ```
-marketscan ingest --commit                # 일봉 수집 → ohlcv_cache
-marketscan run --market krx --commit      # 한국장 판정
-marketscan run --market krx    --commit   # 한국장 마감 후
-marketscan run --market us     --commit   # 미국장 마감 후
+marketscan ingest --commit    # 일봉·지수 수집 → ohlcv_cache
+marketscan run --commit       # 판정 (Fresh Bar Gate가 시장을 알아서 거른다)
+marketscan evaluate           # 사후 수익률 채우기
+marketscan scorecard          # 매월 1회 — ★ 제품
 ```
 
 - Fresh Bar Gate(3.5)가 있으므로 `--market` 없이 전부 돌려도 되지만, 명시하는 쪽이 로그를
@@ -1091,11 +1020,22 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 
 **서머타임은 날마다 다시 계산해 넘긴다.** 하루를 24시간으로 더하면 전환 날 한 시간 어긋나고, 그 어긋남이 **마감 전에 돌아 어제 봉으로 판정하는** 사고가 된다.
 
-**토큰은 환경변수로 받는다**(규칙 7) — 설정 파일은 복사·공유되기 때문이다. 없으면 알림을 **기록만** 하고 화면에 그렇게 적는다(미구현을 성공처럼 보이게 하지 않는다, 12.3).
+**토큰은 `config.yml`의 `telegram:`에 둔다** (2026-08-06에 규칙 7을 사용자 결정으로 뒤집었다 — 파일 하나로 끝나는 쪽이 실제로 쓰기 쉽고, 이 파일은 저장소 바깥에 사는 개인 자산이다). 대신 저장소 예제에는 플레이스홀더만 두고, **실행 이력 스냅샷에서는 토큰을 뺀다**(`AppConfig.snapshot()`). 환경변수는 덮어쓰기 경로로 남아 있다. 없으면 알림을 **기록만** 한다(미구현을 성공처럼 보이게 하지 않는다, 12.3).
 
 **보안** — 네트워크에 아무것도 열지 않는다(웹 UI를 걷어내면서 포트도 사라졌다). 남은 비밀은 **텔레그램 토큰뿐**이며 시세에는 자격 증명이 필요 없다(3.3).
 
 **백업** — `~/.marketscan/` 하나(설정·전략·SQLite·리포트) · 마스터 키. `ohlcv_cache`는 무료 소스가 막혀도 남는 유일한 자산이므로 반드시 포함한다(3.9).
+
+**환경 변수** — 접두사는 `MARKETSCAN_`. 상대 경로는 전부 `config_dir` 기준으로 펴진다.
+
+| 변수 | 기본값 |
+| :--- | :--- |
+| `MARKETSCAN_CONFIG_DIR` | `~/.marketscan` |
+| `MARKETSCAN_CONFIG_PATH` | `config.yml` |
+| `MARKETSCAN_STRATEGIES_DIR` | (없음 — 설정 파일과 같은 디렉터리) |
+| `MARKETSCAN_DATABASE_URL` | `sqlite+aiosqlite:///./data/marketscan.db` |
+| `MARKETSCAN_REPORTS_DIR` | `reports` |
+| `MARKETSCAN_TELEGRAM_TOKEN` · `..._CHAT_ID` | (없음 — `config.yml`의 `telegram:`을 덮어쓴다) |
 
 **타임존** — 프로세스는 UTC로 고정하고 표시만 `user_timezone`으로 변환한다. 스케줄 시각은 로컬 기준으로 적되 **시장 마감과의 관계를 함께 남겨** 서머타임 전환 때 확인할 수 있게 한다(3.2).
 
@@ -1103,7 +1043,8 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 
 ## 9. 구현 로드맵
 
-**진행 상태의 체크박스는 `README.md`가 갖는다.** 여기는 순서의 근거만 적는다.
+**진행 상태와 순서의 근거를 함께 갖는다** (2026-08-06에 README에서 옮겨 왔다 —
+README는 "무엇이고 어떻게 쓰는가"만 갖는다).
 
 | Phase | 범위 | 상태 |
 | :--- | :--- | :--- |
@@ -1112,19 +1053,36 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 | **1** | 전략 러너 & 단일 시장 E2E — 업비트 실물 일봉으로 완주, `bar_state` 영속화 | ✅ |
 | **2** | 멀티 마켓 ★ — 캘린더 3종, 무인증 소스 4종, 라우팅·폴백, **Ingestion Worker + `ohlcv_cache`**, venue 목록 + 시장별 랭킹 | ✅ |
 | **3** | ★ **백테스트 & 상주 실행** — `backtest`(날짜별 리플레이 + 차트), `serve`(스케줄 + 알림 + 하트비트) | ✅ |
-| **3.5** | 엔진 검증 — 난수 신호·전량 매수·신호 1일 밀기·상장폐지 포함 4종, 신호 품질 지표 | ⬜ |
-| **4** | LLM 스크리닝 — Provider 추상화, `LLM Screen`, `abstain`/`confidence` | ⬜ |
-| **4.5** | 운용 — `shadow` 모드로 최소 몇 달 관찰, 오버라이드 추적, 소액 시작 | ⬜ |
+| **3.5** | ★ **사후 검증 = 제품** — 아래 참조 | ✅ |
+| **4** | LLM 스크리닝 — Provider 추상화, `LLM Screen`, `abstain`/`confidence` | ❄️ **동결** |
+| **4.5** | 운용 — 관찰, 오버라이드 추적, 소액 시작 | ⬜ |
 | **5** | 실주문 (선택) — `BrokerProvider`, RiskGuard, `paper` 2주 후 `live` 소액 | ⬜ |
+
+**Phase 3.5 상세 (2026-08-06 완료)**
+
+앞의 넷은 **숫자를 만드는 일**이고 마지막 하나는 **그 숫자를 의심하는 일**이다.
+순서를 뒤집을 수 없고, 마지막을 빼면 앞의 넷은 그냥 자신감 기계에 계기판을 달아 준
+것이 된다.
+
+| # | 항목 | 왜 이 순서인가 |
+| :--- | :--- | :--- |
+| 1 | 텔레그램 `[샀다/안 샀다]` 버튼 | **오늘부터 응답이 쌓여야** 한 달 뒤 성적표에 내용이 있다. 터미널에서 `signals ack`를 치게 두면 아무도 안 친다 |
+| 2 | 규칙 18 — 신호 종목 계속 수집 | 3의 전제. 밀린 종목은 대개 내린 종목이라 봉이 끊기면 **손실만 결측된다** |
+| 3 | 사후 수익률 (`evaluate`) | 캐시만 읽는다. 3.9가 캐시를 자산으로 못박아 둔 것이 여기서 값을 한다 |
+| 4 | ★ 성적표 (`scorecard`) + 벤치마크 | **제품.** 숫자를 혼자 두지 않는다 — 승률 옆 기저율, 수익률 옆 초과수익 |
+| 5 | 엔진 검증 4종 | 위 숫자를 믿어도 되는지. **이 Phase의 목적** |
+
+**Phase 4를 동결한 이유** — 기반이 신뢰를 얻기 전에 층을 얹지 않는다. 성적표가
+6개월치 숫자를 낸 뒤에 다시 꺼내고, 그때 물을 것은 "LLM을 붙일까"가 아니라
+**"지금 전략의 성적이 LLM을 붙일 만한가"**다.
 
 **순서의 근거**
 
 - ★ **`backtest`를 단일 종목으로 좁힌 이유** — 유니버스 전체를 되감으려면 그날 상장돼 있던
   종목 목록이 필요한데 거래소는 "지금"만 준다(규칙 14). 좁히면 그 문제를 만나지 않고, 대신
   횡단면 컷을 재현하지 못한다는 한계가 생긴다 — **우회하지 않고 화면에 적는 쪽**을 골랐다(12.7).
-- ⚠️ **`review`를 없애면서 out-of-sample 검증이 비었다.** 그때 실제로 내보낸 신호를 나중에
-  보는 것이 백테스트보다 정직한데, 지금 그걸 보는 화면이 없다. 남은 것은 `signals`·`stats`이고
-  **사후 수익률·hit rate·IC를 채우는 것이 Phase 3.5의 첫 항목**인 이유가 이것이다.
+- ⚠️ **`review`를 없애면서 비었던 out-of-sample 검증을 Phase 3.5가 메웠다.** 실제로
+  내보낸 신호를 나중에 보는 것이 백테스트보다 정직하다 — 그 창구가 `scorecard`다.
 - **백테스트가 LLM보다 앞이다.** 비결정적이고 비싼 LLM 계층을 얹기 **전에** 데이터·엔진의
   정직성을 확인해야 한다.
 - **Phase 1을 시장 하나로 좁힌 이유** — 끝까지 완주해야 Phase 2에서 어댑터를 늘릴 때 문제가
@@ -1153,7 +1111,7 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 | 실패한 실행이 봉을 소비 | **신호 유실** | `stage()` 후 성공 시에만 `commit()` (3.5) |
 | 미국장 서머타임 오처리 | 신호 시각 1시간 오차 | `ZoneInfo` 사용, 전환일 회귀 테스트 (3.2) |
 | 장 마감 중 신호 재발생 | 알림 폭주 | Fresh Bar Gate + `skip_stale` (3.5) |
-| 중복 알림 | 신뢰도 하락 | `dedup_key` UNIQUE + Cooldown 노드 (4.5) |
+| 중복 알림 | 신뢰도 하락 | `dedup_key` UNIQUE (4.5) |
 | 미완성 캔들 신호 | 잘못된 판단 | `closed_only` + 마감 후 지연 (4.4) |
 | **LLM 학습 데이터 누출** | **백테스트가 낙관 편향** | 캐시로는 못 막는다. 경고 배지 + `shadow`를 1급 검증 경로로 (4.8) |
 | LLM 비용 폭증 / 근거 없는 단정 | 운영비 / 잘못된 제외 | 캐시·호출 상한·**필터 뒤 배치**, `abstain`·`confidence`를 1급 출력으로 (5장) |
@@ -1172,14 +1130,6 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 
 > 번호는 이력이다. 코드 주석이 `11장 4번` 형태로 참조하므로 **재사용하지 않고 늘려서 쓴다.**
 
-10. ★ **`acted` 응답을 어떻게 받을 것인가** — 지금은 터미널에서 `signals ack <id> --ignored`를
-   쳐야 한다. **아무도 안 치므로 오버라이드 데이터가 영영 안 쌓인다.** 유력안은 텔레그램
-   인라인 버튼(`[샀다] [안 샀다]`)이고, 그러면 `serve`가 `getUpdates`로 콜백을 받는
-   경로가 생긴다 — **지금까지 알림은 나가기만 했으므로 들어오는 방향이 새로 열리는 것**이다.
-   4.8의 오버라이드 추적 절반이 여기에 달려 있다.
-11. **`stats`가 보여 줄 사후 수익률의 기준 봉 수** — 신호 이후 1·5·20봉을 함께 낼지,
-   하나만 고를지. 4.8은 복수 산출을 적어 뒀으나 무엇을 기본으로 보여 줄지는 미정이다.
-   **하나만 골라 튜닝하기 시작하면 그게 파라미터 탐색이므로**(1.3) 복수 고정을 권한다.
 12. **페이퍼 포트폴리오를 둘 것인가** — 신호별 사후 수익률은 "이걸 따랐으면
    내 계좌가 어땠나"는 답하지 않는다. 답하려면 기계적 청산 규칙 하나("다음 리밸런스에 상위에서
    빠지면 교체")가 필요한데, 이건 전략이 아니라 **계측기**다. ⚠️ 넣는다면 **그 규칙을 절대
@@ -1200,19 +1150,23 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 | :--- | :--- | :--- |
 | 2 | 상장폐지 종목의 과거 가격 확보 | **가능.** PyKRX·FDR 모두 폐지 종목 일봉을 준다 (2018년 이후 폐지 주권 표본 10/10). ⚠️ `SecuGroup == '주권'`만 조회되고 신주인수권증서 등은 빈 결과다. 수집은 `ingest --include-delisted` (3.9) |
 | 3 | 첫 전략 | **횡단면 모멘텀 12-1** (252/21 표준값 고정) |
-| 4 | 파이프라인 정의 형식 | **YAML 확정.** JSON의 문제는 구조가 아니라 주석을 달 수 없다는 것이었다 (6장) |
+| 4 | 설정 형식 | **YAML 확정.** JSON의 문제는 구조가 아니라 주석을 달 수 없다는 것이었다. ⚠️ 2026-08-06에 **DAG 정의 자체가 사라지고 네 항목만 남았다** (6장) |
 | **4b** | **자동 실행과 알림을 무엇이 맡는가** | **`serve` 확정.** 어느 쪽을 택하든 전송 주체는 필요한데, OS 스케줄러로 가면 재시도·백오프가 OS 설정으로 흩어진다. 윈도우 작업 스케줄러의 마찰까지 더해 한곳에 모으는 쪽을 골랐다. ⚠️ **대가는 상주 프로세스이므로 하트비트가 필수다** (8장) |
 | — | 차트 화면의 형태 | **정적 HTML 확정.** 리포트 파일 자체는 서버 없이 열린다 — `serve`는 그 파일을 띄워 줄 뿐이다 (12.7 / 12.9) |
 | — | `serve`에 웹 UI를 둘 것인가 | ~~둔다 (2026-08-04)~~ → **없앤다 (2026-08-06).** 버튼이 하던 일은 전부 터미널에서 되는 일이었고, 새로 할 수 있게 된 것 없이 표면만 늘었다. **화면이 있으니 화면에 뭘 더 넣자가 기능이 붙는 주된 통로**가 됐다 (12.9) |
 | — | 코인을 계속 다룰 것인가 | **걷어낸다 (2026-08-06).** 실제로 거래하지 않는 시장을 훑는 것은 존재 이유가 아니라 유지비다. CCXT·24x7 캘린더·`QuoteStyle`·`daily_boundary`가 함께 사라졌고, 열린 질문 1번(코인 일봉 경계)도 같이 닫혔다 |
-| — | 이 프로젝트의 제품은 무엇인가 | **채점이다 (2026-08-06).** 스크리닝은 흔하고 대체재가 많다. 다른 데 없는 것은 "내가 정한 규칙이 실제로 어땠는가"와 "무시한 신호가 나았는가"뿐이다. **일일 알림은 원료, 성적표가 제품** (1.2 / 4.8) |
+| — | 이 프로젝트의 정체성 | **매수 후보를 뽑아 텔레그램으로 보내는 프로그램 (2026-08-06).** 성적표는 제품이 아니라 **그 알림을 믿을 수 있게 만드는 장치**다 — 알림에 "최근 N건 승률" 한 줄이 붙는 이유 (1.2 / 4.8) |
 | — | Phase 4 (LLM 스크리닝) | **동결 (2026-08-06).** 기반이 신뢰를 얻기 전에 층을 얹지 않는다. 성적표가 6개월치 숫자를 낸 뒤 "지금 전략의 IC가 LLM을 붙일 만한가"로 다시 묻는다 |
-| — | `review`(신호 이력 화면) | **없애기로 확정.** 자리는 `backtest`가 아니라 `stats`가 이어받는다 — 둘은 답하는 질문이 다르다 (12.7) |
+| — | `review`(신호 이력 화면) | **없애기로 확정.** 자리는 `backtest`가 아니라 `scorecard`가 이어받았다 — 둘은 답하는 질문이 다르다 (12.7) |
 | — | 분봉 보존 정책 | 수집하지 않기로 하면서 소멸. `ohlcv_cache`는 SQLite 확정 (3.9) |
 | — | 지표 라이브러리 | 전략 클래스가 각자 임포트하므로 전역 결정이 아니게 됐다 (2.1) |
 | — | 프로젝트 이름 | **`marketscan`.** 3장(멀티 마켓)이 존재 이유이므로 이름이 그것을 말한다. `trade`는 하지 않는 일을 암시하고 `flow`는 폐기된 캔버스 은유였다 |
 | — | 배포 형태 / 구현 언어 | **`uv` + `[project.scripts]` / 파이썬 유지** (부록 C) |
-| — | LLM 노드 배치 | 필터 뒤로 확정. 비용과 역할(정성 필터) 양쪽에서 결론이 같다 (5장) |
+| — | LLM 배치 | 필터 뒤로 확정. 비용과 역할(정성 필터) 양쪽에서 결론이 같다 (5장) |
+| **10** | **`acted` 응답을 어떻게 받을 것인가** | **텔레그램 인라인 버튼 확정 (2026-08-06).** 터미널에서 `signals ack`를 치게 두면 아무도 안 쳐서 오버라이드 데이터가 영영 안 쌓인다. `serve`가 `getUpdates`로 콜백을 받는다 — **지금까지 알림은 나가기만 했으므로 들어오는 방향이 새로 열렸다.** ⚠️ 버튼은 신호가 **1건일 때만** 단다 (메시지 단위라 여러 건이면 어느 신호의 답인지 정해지지 않는다) |
+| **11** | 사후 수익률의 기준 봉 수 | **1·5·20 복수 고정 (2026-08-06).** 하나만 골라 튜닝하기 시작하면 그게 파라미터 탐색이다 (1.3). `evaluate.HORIZONS`가 단일 출처 |
+| — | 벤치마크를 어디에 둘 것인가 | **`benchmark` market의 venue로 (2026-08-06).** `krx_index:KS11` · `us_index:US500`. venue의 market이 `benchmark`라 `venues_of("krx")`가 돌려주지 않으므로 **랭킹 풀에 섞이는 사고가 구조적으로 불가능하다** (규칙 17) |
+| — | DAG 엔진을 남길 것인가 | **걷어낸다 (2026-08-06).** 만들어지는 그래프가 언제나 하나였다. ⚠️ **다시 들일 조건은 실행 경로에 분기가 생길 때** (4.3) |
 
 > 무료 데이터 API의 티어 정책(호출 한도, 이력 범위)은 자주 바뀐다. 본 문서의 수치성 서술은
 > **착수 시점에 재확인**한다.
@@ -1223,7 +1177,7 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 
 사용자가 셋이다 — **사람**, **자동 실행**, 그리고 **CLI를 호출하는 LLM**. 셋의 요구가 다르므로 명령 표면을 그에 맞춰 설계한다.
 
-> **파이프라인 안의 `LLM Screen` 노드(5장)와 혼동하지 않는다.** 그건 결정성·캐시·비용 상한이
+> **Phase 4의 `LLM Screen`(5장, 동결)과 혼동하지 않는다.** 그건 결정성·캐시·비용 상한이
 > 걸린 파이프라인 부품이고, 여기서 말하는 LLM은 **밖에서 CLI를 부르는 대화형 에이전트**다.
 
 ### 12.1 명령
@@ -1236,10 +1190,15 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
 | `ingest [--venue V] [--commit]` | **`--commit` 시에만** | 일봉 수집 → `ohlcv_cache`. **기본은 계획만** (3.9) |
 | `explain <signal_id>` | 없음 | ★ **왜 이 신호가 났는가** (12.5) |
 | `signals list` / `signals ack` | 없음 / 응답 기록 | 신호 이력 / **이 신호대로 움직였는가** (4.8) |
-| `stats [--compare acted]` | 없음 | 신호 품질 지표. `--compare acted`가 오버라이드 분석 |
+| `evaluate` | `signals` 갱신 | 사후 수익률을 채운다 (4.8). **외부 호출 없음** — 캐시만 읽는다 |
+| `scorecard [--send]` | `--send` 시 발송 | ★ **성적표** — 승률·기저율·초과수익·오버라이드 (4.8) |
+| `stats [--compare acted]` | 없음 | 신호 건수·분산. 사후 성적은 `scorecard`가 낸다 |
 | `strategy new / check / list` | `new`만 파일 생성 | 템플릿 / ★ **AST 인과성 검사** (12.6) |
-| `describe` | 없음 | 전략·유니버스·마지막 실행. **에이전트의 방향 잡기용** (캐시 커버리지는 `ingest`가 낸다) |
-| `verify` | 없음 | **미구현.** 엔진 검증 4종 — 난수 신호·전량 매수·신호 1일 밀기·상장폐지 포함 |
+| `describe` | 없음 | 전략·설정·마지막 실행. **에이전트의 방향 잡기용** |
+| `alert-test` | **발송** | 채널이 살아 있는지 지금 확인한다 |
+
+> **엔진 검증 4종은 명령이 아니라 회귀 테스트다** (`tests/test_honesty.py`). 사람이
+> 불러야 하는 것으로 두면 안 부르게 되고, 그러면 방어선이 아니라 장식이 된다 (4.8).
 
 **★ 읽기 전용 명령은 DB 파일조차 만들지 않는다.** 엔진을 열기만 해도 SQLite 파일이 생기므로 `_database_exists()`가 먼저 확인한다.
 
@@ -1256,9 +1215,11 @@ APScheduler를 기각한 이유("프로세스가 죽으면 스케줄도 같이 �
   그러면 1.2의 "주의력 기계"가 무너진다. **무시하게 된 알림은 없는 알림이다.**
 - **단일 실행의 산출물은 stdout과 정적 HTML 리포트다.** dry-run은 `latest.html` 하나를
   덮어쓰고 `--commit` 실행만 `run_<id>.html`로 남는다 — 실제로 나간 판단만 이력이 되면 된다.
-- **차단은 노드 안이 아니라 실행 엔진에 둔다.** 노드가 `sends_external_messages = True`를
-  선언하면 `ctx.sends_alerts`가 False일 때 엔진이 **아예 실행하지 않는다.** 노드마다
-  `if ctx.sends_alerts:`를 심는 방식은 배선 노드가 늘어나면 언젠가 하나를 빠뜨리고, 그날
+- ★ **2026-08-06부터 이것은 런타임 검사가 아니라 구조다.** 예전에는 노드가
+  `sends_external_messages = True`를 선언하고 엔진이 걸렀는데, **선언을 빠뜨리면 새는**
+  구조였다. 지금 `app/pipeline.py`에는 바깥으로 나가는 코드 경로가 아예 없고 알림은
+  `serve`가 실행 **뒤에** 보낸다 — 빠뜨릴 자리가 없다. 회귀 테스트가 그 파일에 전송
+  코드가 들어오는 것을 막는다. 옛 방식은 배선이 늘어나면 언젠가 하나를 빠뜨리고, 그날
   손으로 돌린 실행이 채널로 메시지를 쏜다.
 - `ctx.sends_alerts`는 **세 조건의 곱**이다 — `allow_alerts`(`serve`만 켠다) × `--commit` ×
   모드가 backtest·shadow가 아닐 것.
@@ -1357,7 +1318,7 @@ marketscan serve      # 상주. 화면 없음. 종료는 Ctrl+C
 
 | | |
 | :--- | :--- |
-| **스케줄 발화** | `scheduleTrigger`가 정한 시각에 `run --commit`을 부른다 |
+| **스케줄 발화** | 설정의 `schedule.at`이 정한 시각에 `run --commit`을 부른다 |
 | **알림** | 신호가 있으면 채널로 보낸다. ★ **`allow_alerts`를 켜는 유일한 자리** (12.2) |
 | **하트비트** | 신호 0건이어도 하루 1회. 없으면 프로세스가 죽은 것과 구분되지 않는다 (8장) |
 
@@ -1366,7 +1327,7 @@ marketscan serve      # 상주. 화면 없음. 종료는 Ctrl+C
 - **네트워크에 아무것도 열지 않는다.** 바인딩이 없으므로 "인증 없는 화면이 `--commit`을 부를 수 있다"는 위험 자체가 없어졌다.
 - **결과를 보는 창구는 텔레그램과 CLI다** — `signals list` · `explain <id>` · `stats`. 리포트 HTML은 `~/.marketscan/reports/`에서 직접 연다.
 
-> **되살리지 않는다.** React 캔버스도, 서버 렌더 화면도, `package.json`도. 결과를 더 잘 보고 싶다는 요구가 생기면 **화면이 아니라 알림 내용과 `stats` 출력을 고친다** — 그쪽이 실제로 읽는 표면이다.
+> **되살리지 않는다.** React 캔버스도, 서버 렌더 화면도, `package.json`도. 결과를 더 잘 보고 싶다는 요구가 생기면 **화면이 아니라 알림 내용과 성적표를 고친다** — 그쪽이 실제로 읽는 표면이다.
 
 ### 12.8 만들지 않을 것
 

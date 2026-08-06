@@ -33,6 +33,3 @@ reports/
 .idea/
 .DS_Store
 Thumbs.db
-
-# 작업 중인 문서 사본 (README copy.md 등)
-*copy.md

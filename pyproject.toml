@@ -1,7 +1,7 @@
 [project]
 name = "marketscan"
 version = "0.1.0"
-description = "Multi-market cross-sectional screener and signal alerts"
+description = "매수 후보를 뽑아 텔레그램으로 보내 주는 개인용 스크리너"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

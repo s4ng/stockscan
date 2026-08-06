@@ -261,10 +261,9 @@ class Scheduler:
             return ""
 
     async def _send_scorecard(self, now: datetime) -> None:
-        """★ **이 메시지가 제품이다** (4.8).
+        """한 달에 한 번 오는 성적표 (4.8).
 
-        일일 알림은 원료다 — 모르는 종목의 순위를 받아도 할 수 있는 다음 행동이
-        없다. 한 달에 한 번 오는 이것이 "내가 정한 규칙이 실제로 어땠는가"에 답한다.
+        일일 알림이 답하지 못하는 것 — "내가 정한 규칙이 실제로 어땠는가" — 에 답한다.
         """
         from app import scorecard as sc
 

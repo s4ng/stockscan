@@ -1,8 +1,7 @@
 """marketscan CLI (ARCHITECTURE.md 12장).
 
-사람과 LLM이 같은 표면으로 결과에 질문한다. `serve`가 같은 명령을 웹 화면으로도
-띄우지만, **실행 본체는 양쪽 모두 `app/service.py`를 지난다** — 화면에서 누른 것과
-터미널에서 친 것이 다른 일을 하면 규칙 11·13이 화면 쪽으로 우회된다.
+사람과 LLM이 같은 표면으로 결과에 질문한다. **실행 본체는 스케줄러도 터미널도
+`app/service.py`를 지난다** — 갈라지면 규칙 11·13이 우회된다.
 
 **읽기 전용이 기본이다.** `explain` · `signals` · `stats` · `describe` ·
 `strategy check`는 부작용이 없고, `run`은 `--commit` 없이는 알림도 기록도 하지
@@ -50,7 +49,7 @@ UTC = ZoneInfo("UTC")
 
 cli = typer.Typer(
     name="marketscan",
-    help="멀티마켓 횡단면 스크리너 · 신호 알림 CLI",
+    help="매수 후보를 뽑아 텔레그램으로 보내 주는 프로그램",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -175,9 +174,9 @@ def _report_run(
                 "node_id": n.node_id,
                 "type": n.type,
                 "status": str(n.status),
-                # 노드가 몇 건을 내보냈는가. "왜 신호가 0건인가"에 답하려면 어느
-                # 노드에서 0이 됐는지가 보여야 한다 — 상태만으로는 구분되지
-                # 않는다(0종목을 수집한 노드도 success다).
+                # 이 단계가 몇 건을 내보냈는가. "왜 신호가 0건인가"에 답하려면
+                # 어느 단계에서 0이 됐는지가 보여야 한다 — 상태만으로는 구분되지
+                # 않는다(0종목을 수집한 단계도 success다).
                 "items": _output_count(n),
                 "error": n.error,
             }
@@ -225,7 +224,7 @@ def _report_run(
     out.emit(payload, human)
     if result.status is RunStatus.FAILED or failed:
         # 4.1이 "빈 Bundle도 정상"이라고 정했으므로 신호 0건은 여기 오지 않는다.
-        # 여기 오는 것은 소스나 노드가 실제로 터진 경우뿐이다 (12.3).
+        # 여기 오는 것은 소스나 단계가 실제로 터진 경우뿐이다 (12.3).
         raise typer.Exit(int(ExitCode.DATA))
 
 
@@ -401,9 +400,9 @@ def scorecard(
     ] = False,
     as_json: JsonOpt = False,
 ) -> None:
-    """★ **성적표 — 이 프로젝트의 제품입니다** (§4.8).
+    """성적표 — **알림을 얼마나 믿어야 하는지**에 답합니다 (§4.8).
 
-    "내가 정한 규칙이 실제로 어땠는가"에 답합니다. 숫자를 혼자 두지 않습니다 —
+    "내가 정한 규칙이 실제로 어땠는가"를 냅니다. 숫자를 혼자 두지 않습니다 —
     승률 옆에는 **기저율**(같은 기간 전 종목의 승률), 수익률 옆에는 **벤치마크 대비**.
     그것이 없으면 상승장에서 아무거나 찍어도 나오는 승률을 전략의 공으로 돌리게 됩니다.
 
@@ -474,8 +473,9 @@ def evaluate(
     ] = 500,
     as_json: JsonOpt = False,
 ) -> None:
-    """신호의 **사후 수익률**을 채웁니다 (§4.8). ★ 이 프로젝트의 제품입니다.
+    """신호의 **사후 수익률**을 채웁니다 (§4.8).
 
+    성적표(`scorecard`)와 알림에 붙는 "최근 N건 승률"이 이 값 위에 섭니다.
     `as_of`로부터 1·5·20봉 뒤 종가를 `ohlcv_cache`에서 찾아 `signals`에 적습니다.
     **외부 호출이 없습니다** — 필요한 봉은 이미 캐시에 있습니다.
 
