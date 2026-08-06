@@ -22,14 +22,13 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.market.instrument import InstrumentRef
-from app.providers.ccxt_base import CcxtProvider
-from app.providers.ohlcv_source import CachedSource, CacheMissError, predicted_adjusted
+from app.providers.ohlcv_source import CachedSource, CacheMissError
 from app.providers.registry import ProviderRegistry
 from app.providers.synthetic import SyntheticProvider
 from app.storage import ohlcv_cache
 from app.storage.models import Base
 
-BTC = InstrumentRef.parse("upbit:KRW-BTC")
+BTC = InstrumentRef.parse("krx:005930")
 START = datetime(2026, 3, 1, tzinfo=UTC)
 
 
@@ -207,7 +206,7 @@ class CacheableSynthetic(SyntheticProvider):
 def registry() -> ProviderRegistry:
     reg = ProviderRegistry()
     reg.register(CacheableSynthetic())
-    reg.set_route("upbit", "*", ["cacheable_synthetic"])
+    reg.set_route("krx", "*", ["cacheable_synthetic"])
     return reg
 
 
@@ -283,7 +282,7 @@ async def test_uncacheable_sources_never_reach_the_permanent_cache(maker):
     """
     reg = ProviderRegistry()
     reg.register(SyntheticProvider())  # cacheable=False
-    reg.set_route("upbit", "*", ["synthetic"])
+    reg.set_route("krx", "*", ["synthetic"])
 
     result = await CachedSource(reg, maker, writable=True).load(
         BTC, "1d", START + timedelta(days=29), 30
@@ -293,17 +292,6 @@ async def test_uncacheable_sources_never_reach_the_permanent_cache(maker):
     async with maker() as session:
         cov = await ohlcv_cache.coverage(session, BTC, "1d", adjusted=True)
     assert cov.bars == 0  # 캐시에는 남지 않았다
-
-
-async def test_crypto_is_never_marked_adjusted():
-    """코인에는 액면분할·배당이 없다. 설정을 그대로 베끼면 안 된다 (3.8).
-
-    이 값이 캐시 키에 들어가므로(규칙 8), 설정을 베끼면 조정가/비조정가가 섞인다.
-    """
-    reg = ProviderRegistry()
-    reg.register(CcxtProvider("upbit"))  # 생성은 네트워크를 타지 않는다
-    reg.set_route("upbit", "*", ["ccxt.upbit"])
-    assert predicted_adjusted(reg, BTC, "1d", True) is False
 
 
 async def test_short_history_hits_the_cache_once_the_source_is_exhausted(maker):
@@ -364,7 +352,7 @@ async def test_a_run_records_the_ingestion_job(maker):
     await CachedSource(registry(), maker, writable=True).load(BTC, "1d", end, 30)
 
     async with maker() as session:
-        job = await session.get(IngestionJobRow, ("upbit", "KRW-BTC", "1d", True))
+        job = await session.get(IngestionJobRow, ("krx", "005930", "1d", True))
     assert job is not None
     assert job.lookback == 30
     assert job.last_success_at == end

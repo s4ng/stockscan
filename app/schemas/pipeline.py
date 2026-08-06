@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -78,8 +78,6 @@ class PipelineSettings(BaseModel):
     """표시용 타임존. 저장은 항상 UTC."""
 
     default_mode: ExecutionMode = ExecutionMode.NOTIFY
-    daily_boundary: Literal["UTC00", "KST00"] = "UTC00"
-    """코인 일봉 경계. UTC00은 업비트 일봉(KST 09:00)과 같은 순간이다."""
 
     adjusted: bool = True
     """수정주가 사용 여부. 파이프라인 전역으로 고정하며 캐시 키에 포함된다."""

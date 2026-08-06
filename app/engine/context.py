@@ -204,7 +204,7 @@ class RunContext:
             now=resolved_now.astimezone(UTC),
             settings=settings,
             providers=providers or default_registry(),
-            calendars=build_calendars(settings.daily_boundary),
+            calendars=build_calendars(),
             ohlcv=ohlcv,
             universe=universe,
             bar_state=bar_state or InMemoryBarState(),

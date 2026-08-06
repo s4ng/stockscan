@@ -18,7 +18,7 @@ from app.storage.bar_state import SqlBarState, sqlite_path
 
 UTC = ZoneInfo("UTC")
 AS_OF = datetime(2026, 8, 2, tzinfo=UTC)
-KEY = bar_key("data", "upbit:KRW-BTC", "1d")
+KEY = bar_key("data", "nasdaq:BTC", "1d")
 
 
 def open_state(path: Path, pipeline_id: str = "pipe_t", *, readonly: bool = False) -> SqlBarState:

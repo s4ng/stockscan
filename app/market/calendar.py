@@ -1,6 +1,6 @@
 """MarketCalendar — 거래 시간 (ARCHITECTURE.md 3.2).
 
-코인은 24/7, KRX는 09:00-15:30 KST, 미국은 09:30-16:00 America/New_York.
+KRX는 09:00-15:30 KST, 미국은 09:30-16:00 America/New_York.
 미국 시장은 서머타임 때문에 고정 오프셋으로 계산하면 안 되므로 항상 ZoneInfo를 쓴다.
 
 **휴장일·조기폐장은 `exchange_calendars`에서 온다** (Phase 2). 손으로 관리하면
@@ -54,52 +54,6 @@ class MarketCalendar(ABC):
         미완성 봉으로 신호를 판단하면 지표가 흔들려 신호가 생겼다 사라지므로,
         Item.as_of는 반드시 이 값을 쓴다 (ARCHITECTURE.md 4.4).
         """
-
-
-class Crypto24x7Calendar(MarketCalendar):
-    """암호화폐 — 항상 열려 있다. 일봉 경계만 정하면 된다.
-
-    주의: KST 09:00은 UTC 00:00과 같은 순간이다. 따라서 의미 있는 선택지는
-    'UTC00'(= KST 09:00, 업비트 일봉 기준)과 'KST00'(한국 자정 = UTC 15:00)이다.
-    """
-
-    id = "crypto24x7"
-    tz = UTC
-
-    #: 일봉 경계 → UTC 기준 시각(hour)
-    BOUNDARIES = {"UTC00": 0, "KST00": 15}
-
-    def __init__(self, daily_boundary: str = "UTC00") -> None:
-        if daily_boundary not in self.BOUNDARIES:
-            raise ValueError(
-                f"daily_boundary는 {list(self.BOUNDARIES)} 중 하나여야 합니다 "
-                f"(받은 값: {daily_boundary!r})"
-            )
-        self.daily_boundary = daily_boundary
-        self._boundary_hour = self.BOUNDARIES[daily_boundary]
-
-    def is_open(self, t: datetime) -> bool:
-        return True
-
-    def last_closed_bar(self, now: datetime, timeframe: str) -> datetime | None:
-        tf = normalize(timeframe)
-        now = _as_utc(now)
-        if is_intraday(tf):
-            step = duration(tf)
-            epoch = datetime(1970, 1, 1, tzinfo=UTC)
-            elapsed = (now - epoch) // step
-            return epoch + elapsed * step
-        # 일봉 이상: 경계 시각마다 마감
-        boundary_today = now.replace(
-            hour=self._boundary_hour, minute=0, second=0, microsecond=0
-        )
-        if boundary_today > now:
-            boundary_today -= timedelta(days=1)
-        if tf == "1w":
-            # 주봉은 경계가 지난 첫 월요일에 마감
-            back = (boundary_today.weekday() - 0) % 7
-            boundary_today -= timedelta(days=back)
-        return boundary_today
 
 
 class SessionCalendar(MarketCalendar):
@@ -284,23 +238,21 @@ def us_equity_calendar(holidays: frozenset[date] = frozenset()) -> SessionCalend
 EXCHANGE_CODES = {"krx": "XKRX", "us_equity": "XNYS"}
 
 
-def build_calendars(daily_boundary: str = "UTC00") -> dict[str, MarketCalendar]:
-    """calendar_id → 구현체. 주식은 실제 휴장일이 든 캘린더를 쓴다."""
+def build_calendars() -> dict[str, MarketCalendar]:
+    """calendar_id → 구현체. 실제 휴장일이 든 캘린더를 쓴다."""
     return {
-        "crypto24x7": Crypto24x7Calendar(daily_boundary),
         "krx": ExchangeSessionCalendar("krx", "XKRX"),
         "us_equity": ExchangeSessionCalendar("us_equity", "XNYS"),
     }
 
 
-def build_offline_calendars(daily_boundary: str = "UTC00") -> dict[str, MarketCalendar]:
+def build_offline_calendars() -> dict[str, MarketCalendar]:
     """휴장일을 모르는 캘린더 구성. **테스트 전용.**
 
     주말만 제외하므로 공휴일에도 세션이 열린 것으로 계산된다. 운영에 쓰면
     없는 세션의 신호가 난다.
     """
     return {
-        "crypto24x7": Crypto24x7Calendar(daily_boundary),
         "krx": krx_calendar(),
         "us_equity": us_equity_calendar(),
     }
@@ -310,12 +262,11 @@ def session_date(bar_time: datetime, calendar: MarketCalendar) -> date:
     """봉의 **세션 날짜**. 차트의 x축과 마커가 함께 쓰는 단일 출처다.
 
     ★ `bar_time`은 세션의 **마감** 시각이라(규칙 15) 그대로 날짜를 떼면 하루
-    어긋난다 — 업비트 8/2 일봉의 마감은 UTC 8/3 00:00이라 8/3으로 찍히고,
-    그러면 차트의 봉과 마커가 서로 다른 날에 앉는다. 1초를 빼서 세션 **안쪽**으로
-    들어간 뒤 그 시장의 시간대로 옮긴다.
+    어긋날 수 있다 — 미국 8/3 세션의 마감은 UTC 8/3 20:00인데, 이것을 KST로
+    옮기면 8/4 새벽이라 한국 시간대로 날짜를 떼면 하루 밀린다. 1초를 빼서
+    세션 **안쪽**으로 들어간 뒤 그 시장의 시간대로 옮기면 두 경우가 함께 맞는다.
 
-    미국장도 같은 이유로 필요하다: 8/3 세션의 마감은 UTC 8/3 20:00이지만
-    KST로 옮기면 8/4 새벽이라, 한국 시간대로 날짜를 떼면 역시 하루 밀린다.
+    차트의 x축과 마커가 이 함수 하나를 공유해야 봉과 마커가 같은 날에 앉는다.
     """
     return (_as_utc(bar_time) - timedelta(seconds=1)).astimezone(calendar.tz).date()
 

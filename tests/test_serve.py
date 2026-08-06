@@ -34,7 +34,7 @@ SPEC = PipelineSpec.model_validate(
                 "params": {
                     "at": [
                         {"time": "15:40", "market": "krx", "note": "KRX 마감 뒤"},
-                        {"time": "09:10", "market": "crypto"},
+                        {"time": "09:10", "market": "us"},
                     ],
                     "heartbeat": "09:00",
                 },
@@ -153,7 +153,7 @@ async def test_starting_late_does_not_replay_the_days_slots():
     await scheduler.tick(evening.replace(minute=1))
 
     assert calls == []
-    assert scheduler.state.skipped_on_start == ["15:40 [krx]", "09:10 [crypto]"]
+    assert scheduler.state.skipped_on_start == ["15:40 [krx]", "09:10 [us]"]
 
 
 @pytest.mark.asyncio

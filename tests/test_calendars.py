@@ -16,7 +16,6 @@ import pytest
 
 from app.market.calendar import (
     CalendarRangeError,
-    Crypto24x7Calendar,
     ExchangeSessionCalendar,
     build_calendars,
 )
@@ -104,39 +103,18 @@ def test_out_of_range_is_an_error_not_a_holiday(krx: ExchangeSessionCalendar):
         krx.last_closed_bar(at("2099-01-01T00:00:00+00:00"), "1d")
 
 
-# ------------------------------------------------------------------------ 코인
-def test_crypto_never_closes():
-    """24/7이라 캘린더 분기가 없다 — Phase 1이 업비트로 좁힌 이유다."""
-    crypto = Crypto24x7Calendar("UTC00")
-
-    assert crypto.is_open(at("2026-01-01T03:00:00+00:00"))
-    assert crypto.last_closed_bar(at("2026-08-02T13:00:00+00:00"), "1d") == at(
-        "2026-08-02T00:00:00+00:00"
-    )
-
-
-def test_crypto_daily_boundary_is_configurable():
-    """KST00은 UTC 15:00이다. 코인 신호 전체가 이 경계에 좌우된다 (11장 1번)."""
-    kst = Crypto24x7Calendar("KST00")
-
-    assert kst.last_closed_bar(at("2026-08-02T13:00:00+00:00"), "1d") == at(
-        "2026-08-01T15:00:00+00:00"
-    )
-
-
 # ------------------------------------------------------------ 혼합 파이프라인 (3.5)
 def test_one_now_yields_a_different_as_of_per_market():
     """★ Fresh Bar Gate가 시장별 마감을 알아서 걸러 주는 근거다.
 
-    같은 `ctx.now`에 코인·한국·미국이 서로 다른 봉을 가리킨다. 사용자는 캘린더를
+    같은 `ctx.now`에 한국과 미국이 서로 다른 봉을 가리킨다. 사용자는 캘린더를
     신경 쓸 필요가 없다.
     """
-    calendars = build_calendars("UTC00")
+    calendars = build_calendars()
     now = at("2026-08-02T13:00:00+00:00")  # 일요일
 
     bars = {cid: cal.last_closed_bar(now, "1d") for cid, cal in calendars.items()}
 
-    assert bars["crypto24x7"] == at("2026-08-02T00:00:00+00:00")  # 코인은 오늘 봉
     assert bars["krx"] == at("2026-07-31T06:30:00+00:00")  # 금요일 마감
     assert bars["us_equity"] == at("2026-07-31T20:00:00+00:00")  # 금요일 마감
-    assert len(set(bars.values())) == 3
+    assert len(set(bars.values())) == 2

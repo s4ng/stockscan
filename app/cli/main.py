@@ -72,7 +72,7 @@ def run(
         Path | None, typer.Option("--pipeline", "-p", help="파이프라인 정의 JSON 경로")
     ] = None,
     market: Annotated[
-        str | None, typer.Option("--market", help="crypto | krx | us — 해당 시장만 실행")
+        str | None, typer.Option("--market", help="krx | us — 해당 시장만 실행")
     ] = None,
     mode: Annotated[
         ExecutionMode | None, typer.Option("--mode", help="실행 모드 (기본: 파이프라인 설정)")
@@ -466,7 +466,7 @@ def serve(
 @cli.command()
 def ingest(
     venue: Annotated[
-        str | None, typer.Option("--venue", help="수집할 venue (예: upbit, krx)")
+        str | None, typer.Option("--venue", help="수집할 venue (예: krx, nasdaq)")
     ] = None,
     pipeline: Annotated[Path | None, typer.Option("--pipeline", "-p")] = None,
     lookback: Annotated[

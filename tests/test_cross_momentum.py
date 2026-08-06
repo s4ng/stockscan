@@ -53,7 +53,7 @@ def test_momentum_measures_the_window_before_the_skip(strategy, ctx: RunContext)
     """P[t-21] / P[t-273] - 1 이어야 한다."""
     params = strategy.Params(lookback=252, skip=21)
     closes = ramp(300, 100.0, 400.0)
-    item = make_item("upbit:KRW-BTC", closes)
+    item = make_item("nasdaq:BTC", closes)
 
     result = strategy.compute(item, params, ctx)
 
@@ -71,8 +71,8 @@ def test_recent_month_does_not_move_the_score(strategy, ctx: RunContext):
     base = ramp(300, 100.0, 400.0)
     spiked = [*base[:-21], *[v * 3 for v in base[-21:]]]
 
-    calm = strategy.compute(make_item("upbit:KRW-BTC", base), params, ctx)
-    spike = strategy.compute(make_item("upbit:KRW-BTC", spiked), params, ctx)
+    calm = strategy.compute(make_item("nasdaq:BTC", base), params, ctx)
+    spike = strategy.compute(make_item("nasdaq:BTC", spiked), params, ctx)
 
     assert calm.features["momentum_12_1"] == pytest.approx(spike.features["momentum_12_1"])
     # 다만 건너뛴 구간의 수익률은 해석용으로 남는다 — explain에서 보여야 한다
@@ -83,7 +83,7 @@ def test_skip_zero_includes_the_most_recent_bar(strategy, ctx: RunContext):
     params = strategy.Params(lookback=10, skip=0)
     closes = ramp(30, 100.0, 200.0)
 
-    result = strategy.compute(make_item("upbit:KRW-BTC", closes), params, ctx)
+    result = strategy.compute(make_item("nasdaq:BTC", closes), params, ctx)
 
     assert result.features["momentum_12_1"] == pytest.approx(closes[-1] / closes[-11] - 1)
 
@@ -92,7 +92,7 @@ def test_skip_zero_includes_the_most_recent_bar(strategy, ctx: RunContext):
 def test_insufficient_bars_yields_no_score(strategy, ctx: RunContext):
     """신규 상장 종목이 짧은 이력으로 극단적 모멘텀을 내면 안 된다."""
     params = strategy.Params()
-    item = make_item("upbit:KRW-NEW", ramp(50, 100.0, 500.0))
+    item = make_item("nasdaq:NEW", ramp(50, 100.0, 500.0))
 
     result = strategy.compute(item, params, ctx)
 
@@ -103,13 +103,13 @@ def test_insufficient_bars_yields_no_score(strategy, ctx: RunContext):
 def test_scoreless_items_are_dropped_from_the_ranking_with_a_warning(strategy, ctx: RunContext):
     params = strategy.Params()
     items = [
-        strategy.compute(make_item("upbit:KRW-BTC", ramp(300, 100.0, 400.0)), params, ctx),
-        strategy.compute(make_item("upbit:KRW-NEW", ramp(50, 100.0, 500.0)), params, ctx),
+        strategy.compute(make_item("nasdaq:BTC", ramp(300, 100.0, 400.0)), params, ctx),
+        strategy.compute(make_item("nasdaq:NEW", ramp(50, 100.0, 500.0)), params, ctx),
     ]
 
     ranked = strategy.rank(Bundle(items), params, ctx)
 
-    assert [i.instrument.symbol for i in ranked] == ["KRW-BTC"]
+    assert [i.instrument.symbol for i in ranked] == ["BTC"]
     assert any("제외" in r.message for r in ctx.log.records)
 
 
@@ -124,14 +124,14 @@ def test_startup_candles_covers_the_whole_window(strategy):
 def test_ranking_puts_the_strongest_first(strategy, ctx: RunContext):
     params = strategy.Params()
     items = [
-        strategy.compute(make_item("upbit:KRW-SLOW", ramp(300, 100.0, 120.0)), params, ctx),
-        strategy.compute(make_item("upbit:KRW-FAST", ramp(300, 100.0, 900.0)), params, ctx),
-        strategy.compute(make_item("upbit:KRW-FLAT", [100.0] * 300), params, ctx),
+        strategy.compute(make_item("nasdaq:SLOW", ramp(300, 100.0, 120.0)), params, ctx),
+        strategy.compute(make_item("nasdaq:FAST", ramp(300, 100.0, 900.0)), params, ctx),
+        strategy.compute(make_item("nasdaq:FLAT", [100.0] * 300), params, ctx),
     ]
 
     ranked = strategy.rank(Bundle(items), params, ctx)
 
-    assert [i.instrument.symbol for i in ranked] == ["KRW-FAST", "KRW-SLOW", "KRW-FLAT"]
+    assert [i.instrument.symbol for i in ranked] == ["FAST", "SLOW", "FLAT"]
     assert ranked.items[0].features["rank"] == 1
     assert ranked.items[0].features["universe_size"] == 3
 
@@ -140,7 +140,7 @@ def test_select_keeps_the_top_slice(strategy, ctx: RunContext):
     params = strategy.Params(top_pct=0.34)
     items = [
         strategy.compute(
-            make_item(f"upbit:KRW-C{i}", ramp(300, 100.0, 100.0 + i * 50)), params, ctx
+            make_item(f"nasdaq:C{i}", ramp(300, 100.0, 100.0 + i * 50)), params, ctx
         )
         for i in range(1, 7)
     ]
@@ -149,7 +149,7 @@ def test_select_keeps_the_top_slice(strategy, ctx: RunContext):
     selected = strategy.select(ranked, params, ctx)
 
     assert len(selected) == 2
-    assert selected.items[0].instrument.symbol == "KRW-C6"
+    assert selected.items[0].instrument.symbol == "C6"
 
 
 def test_parameters_are_the_published_standard(strategy):

@@ -74,9 +74,9 @@ async def maker():
 
 # ------------------------------------------------------------------------ 계획
 async def test_targets_come_from_the_pipeline():
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC", "krx:005930"]), context())
+    plan = await worker.plan_targets(spec(["nasdaq:BTC", "krx:005930"]), context())
 
-    assert {t.instrument.key for t in plan.targets} == {"upbit:KRW-BTC", "krx:005930"}
+    assert {t.instrument.key for t in plan.targets} == {"nasdaq:BTC", "krx:005930"}
     assert all(t.lookback == 30 for t in plan.targets)
     # 노드가 소스를 못 박았으면 수집도 그것을 따른다 — 캐시를 채운 소스와
     # 파이프라인이 쓰려던 소스가 갈리면 3.8이 그 자리에서 깨진다.
@@ -85,15 +85,18 @@ async def test_targets_come_from_the_pipeline():
 
 async def test_end_is_the_last_closed_bar_of_each_market():
     """시장마다 마감이 다르다. 하나로 뭉뚱그리면 없는 세션의 봉을 요청한다."""
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC", "krx:005930"]), context())
+    plan = await worker.plan_targets(spec(["nasdaq:AAPL", "krx:005930"]), context())
     ends = {t.instrument.key: t.end for t in plan.targets}
 
-    assert ends["upbit:KRW-BTC"] == datetime(2026, 3, 10, tzinfo=UTC)
+    # NOW는 3/10 12:00 UTC — KRX는 그날 15:30 KST(06:30 UTC)에 이미 닫혔지만
+    # 미국은 아직 열리지도 않아 직전 세션(3/9)이 마지막 마감이다.
     assert ends["krx:005930"] == datetime(2026, 3, 10, 6, 30, tzinfo=UTC)
+    assert ends["nasdaq:AAPL"] == datetime(2026, 3, 9, 20, 0, tzinfo=UTC)
+    assert ends["nasdaq:AAPL"] != ends["krx:005930"]
 
 
 async def test_lookback_override_wins():
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC"]), context(), lookback=500)
+    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), context(), lookback=500)
     assert plan.targets[0].lookback == 500
 
 
@@ -105,26 +108,26 @@ async def test_a_universe_node_is_actually_resolved():
         NodeSpec(
             id="universe",
             type="symbolUniverse",
-            params={"instruments": ["upbit:KRW-BTC", "upbit:KRW-ETH"]},
+            params={"instruments": ["nasdaq:BTC", "nasdaq:ETH"]},
         ),
     )
     plan = await worker.plan_targets(pipeline, context())
 
-    assert {t.instrument.key for t in plan.targets} == {"upbit:KRW-BTC", "upbit:KRW-ETH"}
+    assert {t.instrument.key for t in plan.targets} == {"nasdaq:BTC", "nasdaq:ETH"}
     assert all(t.origin == "universe" for t in plan.targets)
 
 
 # ------------------------------------------------------------------------ 수집
 async def test_ingest_fills_the_cache(maker):
     ctx = context()
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC"]), ctx)
+    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), ctx)
     report = await worker.ingest(plan, ctx, maker)
 
     assert report.fetched == 1
     assert report.inserted == 30
     async with maker() as session:
         cov = await ohlcv_cache.coverage(
-            session, InstrumentRef.parse("upbit:KRW-BTC"), "1d", adjusted=True
+            session, InstrumentRef.parse("nasdaq:BTC"), "1d", adjusted=True
         )
     assert cov.bars == 30
     assert cov.last == plan.targets[0].end
@@ -133,7 +136,7 @@ async def test_ingest_fills_the_cache(maker):
 async def test_second_run_does_not_touch_the_source(maker):
     """하루 1회 수집이 전제다. 두 번 불러도 소스를 두 번 밟지 않는다."""
     ctx = context()
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC"]), ctx)
+    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), ctx)
     await worker.ingest(plan, ctx, maker)
 
     again = await worker.ingest(plan, ctx, maker)
@@ -145,11 +148,11 @@ async def test_second_run_does_not_touch_the_source(maker):
 
 async def test_one_failure_does_not_stop_the_rest(maker):
     ctx = context()
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC", "upbit:KRW-ETH"]), ctx)
+    plan = await worker.plan_targets(spec(["nasdaq:BTC", "nasdaq:ETH"]), ctx)
     original = ctx.providers.fetch_ohlcv
 
     async def flaky(instrument, *args, **kwargs):
-        if instrument.symbol == "KRW-BTC":
+        if instrument.symbol == "BTC":
             raise RuntimeError("소스가 죽었다")
         return await original(instrument, *args, **kwargs)
 
@@ -157,9 +160,9 @@ async def test_one_failure_does_not_stop_the_rest(maker):
     report = await worker.ingest(plan, ctx, maker)
 
     assert report.fetched == 1
-    assert [k for k, _ in report.failures] == ["upbit:KRW-BTC"]
+    assert [k for k, _ in report.failures] == ["nasdaq:BTC"]
     async with maker() as session:
-        failed = await session.get(IngestionJobRow, ("upbit", "KRW-BTC", "1d", True))
+        failed = await session.get(IngestionJobRow, ("nasdaq", "BTC", "1d", True))
     assert failed.failure_count == 1
     assert "죽었다" in failed.last_error
 
@@ -167,8 +170,8 @@ async def test_one_failure_does_not_stop_the_rest(maker):
 async def test_conflicting_closes_surface_in_the_report(maker):
     """3.8 — 두 소스가 같은 봉을 다르게 주면 수집 리포트에 뜬다."""
     ctx = context()
-    plan = await worker.plan_targets(spec(["upbit:KRW-BTC"]), ctx)
-    btc = InstrumentRef.parse("upbit:KRW-BTC")
+    plan = await worker.plan_targets(spec(["nasdaq:BTC"]), ctx)
+    btc = InstrumentRef.parse("nasdaq:BTC")
     end = plan.targets[0].end
 
     async with maker() as session:

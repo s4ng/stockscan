@@ -31,7 +31,7 @@ PIPELINE = {
             "id": "data",
             "type": "marketData",
             "params": {
-                "instruments": ["upbit:KRW-BTC", "krx:005930", "nasdaq:AAPL"],
+                "instruments": ["nasdaq:BTC", "krx:005930", "nasdaq:AAPL"],
                 "timeframe": "1d",
                 "lookback": 80,
                 # 테스트는 네트워크를 타지 않는다. 기본 라우팅은 코인을 실물
@@ -310,7 +310,7 @@ def test_explain_records_what_the_rank_was_measured_against(workspace: Path):
 
     assert features["universe_scanned"] == 3  # 훑은 종목 전체
     assert features["universe_size"] == 1  # 그중 같은 시장에서 점수가 나온 종목
-    assert features["rank_pool"] in {"crypto", "krx", "us"}
+    assert features["rank_pool"] in {"us", "krx"}
 
 
 @pytest.mark.parametrize(
@@ -550,7 +550,7 @@ def test_market_filter_narrows_the_dynamic_universe(workspace: Path):
             "type": "symbolUniverse",
             "params": {
                 "venues": [
-                    {"venue": "upbit", "top_by_turnover": 5},
+                    {"venue": "nasdaq", "top_by_turnover": 5},
                     {"venue": "krx", "top_by_turnover": 5},
                 ]
             },
@@ -566,7 +566,7 @@ def test_market_filter_narrows_the_dynamic_universe(workspace: Path):
 
     universe = next(n for n in filtered.nodes if n.type == "symbolUniverse")
     assert [q["venue"] for q in universe.params["venues"]] == ["krx"]
-    assert "venues[upbit]" in dropped
+    assert "venues[nasdaq]" in dropped
     # 동적 조회가 남아 있으면 "종목 0개"로 보이더라도 빈 유니버스가 아니다
     assert pipeline_file.has_empty_universe(filtered) is False
 

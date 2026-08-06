@@ -25,7 +25,7 @@ def item_env(item: Item) -> dict[str, Any]:
             "venue": item.instrument.venue,
             "symbol": item.instrument.symbol,
             "display_name": item.instrument.display_name or item.instrument.symbol,
-            "asset_class": str(item.instrument.asset_class),
+            "market": item.instrument.market,
             "quote_currency": item.instrument.quote_currency,
         },
         "features": item.features,

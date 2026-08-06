@@ -74,7 +74,7 @@ def test_channel_excludes_the_judged_bar(strategy, ctx: RunContext):
     highs = [100.0] * (BARS - 1) + [120.0]
 
     result = strategy.compute(
-        make_item("upbit:KRW-BTC", closes, highs=highs), strategy.Params(), ctx
+        make_item("nasdaq:BTC", closes, highs=highs), strategy.Params(), ctx
     )
 
     assert result.features["channel_high"] == pytest.approx(100.0)
@@ -87,7 +87,7 @@ def test_close_below_the_channel_is_not_a_breakout(strategy, ctx: RunContext):
     highs = [100.0] * (BARS - 1) + [130.0]
 
     result = strategy.compute(
-        make_item("upbit:KRW-BTC", closes, highs=highs), strategy.Params(), ctx
+        make_item("nasdaq:BTC", closes, highs=highs), strategy.Params(), ctx
     )
 
     assert result.features["breakout"] is False
@@ -97,7 +97,7 @@ def test_close_below_the_channel_is_not_a_breakout(strategy, ctx: RunContext):
 def test_breakout_margin_is_measured_against_the_channel(strategy, ctx: RunContext):
     closes = [100.0] * (BARS - 1) + [110.0]
 
-    result = strategy.compute(make_item("upbit:KRW-BTC", closes), strategy.Params(), ctx)
+    result = strategy.compute(make_item("nasdaq:BTC", closes), strategy.Params(), ctx)
 
     assert result.features["breakout_margin_pct"] == pytest.approx(0.10)
 
@@ -105,7 +105,7 @@ def test_breakout_margin_is_measured_against_the_channel(strategy, ctx: RunConte
 # ------------------------------------------------------------------------ 게이트
 def test_uptrend_breakout_passes_every_gate(strategy, ctx: RunContext):
     result = strategy.compute(
-        make_item("upbit:KRW-BTC", ramp(BARS, 100.0, 400.0)), strategy.Params(), ctx
+        make_item("nasdaq:BTC", ramp(BARS, 100.0, 400.0)), strategy.Params(), ctx
     )
 
     assert result.features["trend_ok"] is True
@@ -118,7 +118,7 @@ def test_breakout_below_the_trend_ma_is_rejected(strategy, ctx: RunContext):
     """오래 눌린 종목의 반등은 돌파여도 후보가 아니다 — 추세 방향이 아직 아래다."""
     closes = [300.0] * 200 + [100.0] * (BARS - 201) + [105.0]
 
-    result = strategy.compute(make_item("upbit:KRW-BTC", closes), strategy.Params(), ctx)
+    result = strategy.compute(make_item("nasdaq:BTC", closes), strategy.Params(), ctx)
 
     assert result.features["breakout"] is True
     assert result.features["trend_ok"] is False
@@ -129,7 +129,7 @@ def test_breakout_without_absolute_momentum_is_rejected(strategy, ctx: RunContex
     """1년 전보다 아래인 종목의 신고가는 반등이지 추세가 아니다 (MOP 2012)."""
     closes = [*ramp(250, 200.0, 100.0), *ramp(BARS - 250, 100.0, 150.0)]
 
-    result = strategy.compute(make_item("upbit:KRW-BTC", closes), strategy.Params(), ctx)
+    result = strategy.compute(make_item("nasdaq:BTC", closes), strategy.Params(), ctx)
 
     assert result.features["breakout"] is True
     assert result.features["trend_ok"] is True
@@ -140,21 +140,21 @@ def test_breakout_without_absolute_momentum_is_rejected(strategy, ctx: RunContex
 def test_select_keeps_only_ready_items_and_says_why(strategy, ctx: RunContext):
     params = strategy.Params()
     items = [
-        strategy.compute(make_item("upbit:KRW-UP", ramp(BARS, 100.0, 400.0)), params, ctx),
-        strategy.compute(make_item("upbit:KRW-DOWN", ramp(BARS, 400.0, 100.0)), params, ctx),
+        strategy.compute(make_item("nasdaq:UP", ramp(BARS, 100.0, 400.0)), params, ctx),
+        strategy.compute(make_item("nasdaq:DOWN", ramp(BARS, 400.0, 100.0)), params, ctx),
     ]
     ranked = strategy.rank(Bundle(items), params, ctx)
 
     selected = strategy.select(ranked, params, ctx)
 
-    assert [i.instrument.symbol for i in selected] == ["KRW-UP"]
+    assert [i.instrument.symbol for i in selected] == ["UP"]
     assert any("게이트 통과 현황" in r.message for r in ctx.log.records)
 
 
 def test_no_candidate_is_a_verdict_not_a_failure(strategy, ctx: RunContext):
     """0건은 정상 출력이다. 여기서 예외가 나면 파이프라인이 실패로 끝난다."""
     params = strategy.Params()
-    items = [strategy.compute(make_item("upbit:KRW-DOWN", ramp(BARS, 400.0, 100.0)), params, ctx)]
+    items = [strategy.compute(make_item("nasdaq:DOWN", ramp(BARS, 400.0, 100.0)), params, ctx)]
 
     selected = strategy.select(strategy.rank(Bundle(items), params, ctx), params, ctx)
 
@@ -175,21 +175,21 @@ def test_ranking_prefers_the_steadier_trend(strategy, ctx: RunContext):
         if i % 2 == 0 and i != BARS - 1 - params.momentum:
             jumpy[i] *= 1.15
 
-    calm = strategy.compute(make_item("upbit:KRW-CALM", smooth), params, ctx)
-    wild = strategy.compute(make_item("upbit:KRW-WILD", jumpy), params, ctx)
+    calm = strategy.compute(make_item("nasdaq:CALM", smooth), params, ctx)
+    wild = strategy.compute(make_item("nasdaq:WILD", jumpy), params, ctx)
 
     assert calm.features["tsmom_12m"] == pytest.approx(wild.features["tsmom_12m"])
     assert calm.features["annual_vol"] < wild.features["annual_vol"]
 
     ranked = strategy.rank(Bundle([wild, calm]), params, ctx)
-    assert [i.instrument.symbol for i in ranked] == ["KRW-CALM", "KRW-WILD"]
+    assert [i.instrument.symbol for i in ranked] == ["CALM", "WILD"]
 
 
 def test_top_n_caps_the_list_per_market(strategy, ctx: RunContext):
     params = strategy.Params(top_n=3)
     items = [
         strategy.compute(
-            make_item(f"upbit:KRW-C{i}", ramp(BARS, 100.0, 200.0 + i * 20)), params, ctx
+            make_item(f"nasdaq:C{i}", ramp(BARS, 100.0, 200.0 + i * 20)), params, ctx
         )
         for i in range(1, 8)
     ]
@@ -209,7 +209,7 @@ def test_atr_converges_to_a_constant_true_range(strategy, ctx: RunContext):
     lows = [95.0] * BARS
 
     result = strategy.compute(
-        make_item("upbit:KRW-BTC", closes, highs=highs, lows=lows), strategy.Params(), ctx
+        make_item("nasdaq:BTC", closes, highs=highs, lows=lows), strategy.Params(), ctx
     )
 
     assert result.features["atr"] == pytest.approx(10.0)
@@ -223,7 +223,7 @@ def test_stop_is_two_atr_below_the_close(strategy, ctx: RunContext):
     lows = [c * 0.99 for c in closes]
 
     f = strategy.compute(
-        make_item("upbit:KRW-BTC", closes, highs=highs, lows=lows), params, ctx
+        make_item("nasdaq:BTC", closes, highs=highs, lows=lows), params, ctx
     ).features
 
     assert f["stop_2n"] == pytest.approx(f["close"] - params.stop_atr * f["atr"])
@@ -235,7 +235,7 @@ def test_stop_is_two_atr_below_the_close(strategy, ctx: RunContext):
 def test_insufficient_bars_yields_no_score(strategy, ctx: RunContext):
     """신규 상장 종목이 짧은 이력으로 '사상 최고가 돌파'를 만들어 내면 안 된다."""
     result = strategy.compute(
-        make_item("upbit:KRW-NEW", ramp(60, 100.0, 500.0)), strategy.Params(), ctx
+        make_item("nasdaq:NEW", ramp(60, 100.0, 500.0)), strategy.Params(), ctx
     )
 
     assert "trend_strength" not in result.features

@@ -53,15 +53,12 @@ UNIVERSE_NAMES_KEY = "universe_names"
 class VenueQuery(BaseModel):
     """venue 하나를 어떻게 훑을 것인가.
 
-    **원소가 문자열이 아니라 조건 묶음인 이유**는 venue마다 필요한 컷이 다르기
-    때문이다 — 코인은 KRW 마켓 제한이 필요하고 주식은 아니며, 미국 목록에는
-    거래대금이 아예 없다. 조건을 노드 수준에 하나만 두면 어느 시장엔가 안 맞는다.
+    **원소가 문자열이 아니라 조건 묶음인 이유**는 venue마다 쓸 수 있는 컷이 다르기
+    때문이다 — KRX 목록은 거래대금을 주지만 미국 목록에는 아예 없다. 조건을 노드
+    수준에 하나만 두면 어느 시장엔가 안 맞는다.
     """
 
-    venue: str = Field(description="예: upbit, krx, nasdaq")
-    quote_currency: str | None = Field(
-        default=None, description="결제 통화로 마켓 제한. 예: KRW (업비트 원화 마켓만)"
-    )
+    venue: str = Field(description="예: krx, nasdaq, nyse")
     top_by_turnover: int | None = Field(
         default=None, ge=1, description="거래대금 상위 N개만. 소스가 거래대금을 줘야 합니다"
     )
@@ -93,9 +90,8 @@ class SymbolUniverseParams(BaseModel):
         description="훑을 venue들. venue마다 컷 조건을 따로 답니다.",
     )
 
-    # --- 아래 넷은 단수 표기의 하위 호환. `venues` 원소 하나로 접힌다 -------------
+    # --- 아래 셋은 단수 표기의 하위 호환. `venues` 원소 하나로 접힌다 -------------
     venue: str | None = Field(default=None, description="(구) 단일 venue. venues로 접힙니다")
-    quote_currency: str | None = Field(default=None, description="(구) venue와 함께 씁니다")
     top_by_turnover: int | None = Field(default=None, ge=1, description="(구) venue와 함께")
     exclude: list[str] = Field(
         default_factory=list, description="제외할 종목. venue:symbol 형식."
@@ -120,7 +116,6 @@ class SymbolUniverseParams(BaseModel):
             [
                 VenueQuery(
                     venue=self.venue,
-                    quote_currency=self.quote_currency,
                     top_by_turnover=self.top_by_turnover,
                     exclude=list(self.exclude),
                 )
@@ -176,7 +171,6 @@ class SymbolUniverseNode(BaseNode):
                 {
                     "venue": query.venue,
                     "market": VENUES[query.venue].market if query.venue in VENUES else None,
-                    "quote_currency": query.quote_currency,
                     "cut": query.cut(),
                     "count": added,
                     "source": source_id,
@@ -188,7 +182,7 @@ class SymbolUniverseNode(BaseNode):
             # 빈 유니버스는 실패가 아니라 정상 출력이다(4.1). 다만 조용하면 안 된다 —
             # 필터가 과했는지 소스가 빈 목록을 줬는지 구분되어야 한다.
             ctx.log.warning(
-                "유니버스가 0종목입니다. quote_currency·exclude 조건이 과했는지, "
+                "유니버스가 0종목입니다. exclude·top_by_turnover·limit 조건이 과했는지, "
                 "또는 소스가 빈 목록을 줬는지 확인하세요."
             )
 
@@ -241,10 +235,6 @@ class SymbolUniverseNode(BaseNode):
             # 캐시 쓰기 실패가 조용하면 "좀 느리네"로 보이는데, 실제로는 캐시가
             # 영영 안 채워지고 있다.
             ctx.log.warning(warning)
-
-        if query.quote_currency:
-            wanted = query.quote_currency.upper()
-            entries = [e for e in entries if e.instrument.quote_currency == wanted]
 
         if query.top_by_turnover is not None:
             entries = self._top_by_turnover(entries, query, source_id, ctx)

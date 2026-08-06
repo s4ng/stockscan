@@ -1,4 +1,4 @@
-# 추세추종 파이프라인 — 55일 채널 돌파를 코인·한국·미국에서 동시에 훑는다
+# 추세추종 파이프라인 — 55일 채널 돌파를 한국·미국에서 동시에 훑는다
 #
 #   symbolUniverse → marketData → strategyRunner → persistSignal → logAlert
 #
@@ -21,7 +21,6 @@ name: 멀티마켓 추세추종 55일 돌파
 settings:
   user_timezone: Asia/Seoul
   default_mode: notify
-  daily_boundary: UTC00
   adjusted: true
   max_concurrency: 4
 
@@ -35,7 +34,6 @@ nodes:
       #   어디에도 남기지 않습니다. 사람이 적어 두면 전환 때 확인할 수 있습니다.
       timezone: Asia/Seoul
       at:
-        - { time: "09:10", market: crypto, note: "업비트 일봉 마감(09:00 KST) 뒤" }
         - { time: "15:40", market: krx, note: "KRX 마감(15:30) 뒤" }
         - { time: "06:10", market: us, note: "미국장 마감 뒤 — ⚠️ 서머타임에 05:00/06:00으로 움직입니다" }
       # ★ 신호가 0건이어도 하루 1회 보냅니다. 이게 없으면 어느 날부터 시스템이
@@ -49,9 +47,6 @@ nodes:
       # 유동성 컷은 venue마다 따로 겁니다 (§3.7). 추세추종은 유동성이 얇은 종목에서
       # 가짜 돌파가 잦으므로 이 컷이 12-1에서보다 더 중요합니다.
       venues:
-        - venue: upbit
-          quote_currency: KRW
-          top_by_turnover: 60
         - venue: krx
           top_by_turnover: 200
         - venue: nasdaq

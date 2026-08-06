@@ -59,8 +59,8 @@ class ProviderRegistry:
     async def close(self) -> None:
         """소스가 연 커넥션을 닫는다. CLI가 실행 끝에 부른다.
 
-        CCXT는 aiohttp 세션을 들고 있어서 닫지 않으면 프로세스 종료 시
-        "Unclosed client session" 경고가 남는다.
+        지금 등록된 소스는 전부 커넥션을 들고 있지 않지만, 계약은 남겨 둔다 —
+        나중에 세션을 여는 소스가 붙었을 때 정리 지점을 다시 찾지 않아도 된다.
         """
         for provider in self._providers.values():
             closer = getattr(provider, "close", None)
@@ -165,12 +165,9 @@ class ProviderRegistry:
 
 #: venue → 기본 소스 우선순위 (3.4). 앞에서부터 시도하고 실패하면 다음으로 넘어간다.
 #:
-#: 주식은 **두 번째 소스를 둔다.** 무료 소스는 언제든 깨진다는 전제이고(3.9),
+#: **모든 venue에 두 번째 소스를 둔다.** 무료 소스는 언제든 깨진다는 전제이고(3.9),
 #: 폴백이 발동하면 `failed_sources`로 드러나므로 조용히 소스가 바뀌지 않는다.
-#: 코인에 폴백이 없는 것은 거래소마다 상장 종목이 달라 대체가 성립하지 않아서다.
 DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
-    "upbit": ("ccxt.upbit",),
-    "binance": ("ccxt.binance",),
     "krx": ("pykrx", "fdr"),
     "nasdaq": ("yfinance", "fdr"),
     "nyse": ("yfinance", "fdr"),
@@ -180,10 +177,9 @@ DEFAULT_ROUTES: dict[str, tuple[str, ...]] = {
 def default_registry() -> ProviderRegistry:
     """기본 소스 구성 — 전부 무인증이다 (3.3).
 
-    소스 생성은 네트워크를 타지 않는다. CCXT 인스턴스도 pykrx/yfinance 임포트도
-    첫 조회 때로 미뤄진다.
+    소스 생성은 네트워크를 타지 않는다. pykrx/yfinance 임포트도 첫 조회 때로
+    미뤄진다.
     """
-    from app.providers.ccxt_base import CcxtProvider
     from app.providers.fdr_source import FdrProvider
     from app.providers.pykrx_source import PykrxProvider
     from app.providers.synthetic import SyntheticProvider
@@ -191,8 +187,6 @@ def default_registry() -> ProviderRegistry:
 
     registry = ProviderRegistry()
     registry.register(SyntheticProvider())
-    for exchange_id in ("upbit", "binance"):
-        registry.register(CcxtProvider(exchange_id))
     registry.register(PykrxProvider())
     registry.register(YFinanceProvider())
     registry.register(FdrProvider())

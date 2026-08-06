@@ -27,7 +27,7 @@ from app.providers.base import (
 class SyntheticProvider(MarketDataProvider):
     id = "synthetic"
     display_name = "Synthetic (개발용 더미 시세)"
-    venues = ("upbit", "binance", "krx", "nasdaq", "nyse")
+    venues = ("krx", "nasdaq", "nyse")
     credential_schema = None
     capabilities = ProviderCapabilities(
         timeframes=("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"),

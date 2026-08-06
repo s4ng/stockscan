@@ -165,12 +165,13 @@ def test_cut_applied_is_false_for_single_symbol():
 
 # ----------------------------------------------------------------------- 세션 날짜
 def test_chart_bars_use_the_session_date_not_the_close_timestamp():
-    """마감 시각을 그대로 쓰면 코인이 하루 밀린다 — 봉과 마커가 어긋난다."""
+    """마감 시각을 그대로 쓰면 미국장이 하루 밀린다 — 봉과 마커가 어긋난다."""
     calendars = build_offline_calendars()
-    # 업비트 일봉: 1/5 세션의 마감은 UTC 1/6 00:00이다.
-    upbit_close = datetime(2026, 1, 6, 0, 0, tzinfo=UTC)
+    # 미국 1/5 세션의 마감은 UTC 1/5 21:00이다. KST로 옮기면 1/6 새벽이라,
+    # 한국 시간대로 날짜를 떼면 하루 밀린다.
+    us_close = datetime(2026, 1, 5, 21, 0, tzinfo=UTC)
 
-    assert session_date(upbit_close, calendars["crypto24x7"]) == date(2026, 1, 5)
+    assert session_date(us_close, calendars["us_equity"]) == date(2026, 1, 5)
 
 
 def test_markers_and_bars_share_the_same_session_dates():

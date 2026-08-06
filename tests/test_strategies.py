@@ -137,16 +137,16 @@ def test_two_strategies_in_one_file_are_rejected(tmp_path: Path):
 def test_rank_writes_rank_and_percentile(ctx: RunContext):
     bundle = Bundle(
         [
-            make_item("upbit:KRW-BTC", 100).with_features(score=0.3),
-            make_item("upbit:KRW-ETH", 100).with_features(score=0.9),
+            make_item("nasdaq:BTC", 100).with_features(score=0.3),
+            make_item("nasdaq:ETH", 100).with_features(score=0.9),
         ]
     )
     ranked = rank_by(bundle, "score", ctx)
 
-    assert [i.instrument.symbol for i in ranked] == ["KRW-ETH", "KRW-BTC"]
+    assert [i.instrument.symbol for i in ranked] == ["ETH", "BTC"]
     assert [i.features["rank"] for i in ranked] == [1, 2]
     assert all(i.features["universe_size"] == 2 for i in ranked)
-    assert all(i.features["rank_pool"] == "crypto" for i in ranked)
+    assert all(i.features["rank_pool"] == "us" for i in ranked)
 
 
 # --------------------------------------------------------------- 규칙 17 (시장별)
@@ -158,8 +158,8 @@ def test_rank_pools_are_split_by_market(ctx: RunContext):
     """
     bundle = Bundle(
         [
-            make_item("upbit:KRW-BTC", 100).with_features(score=3.0),  # 코인은 스케일이 크다
-            make_item("upbit:KRW-ETH", 100).with_features(score=2.0),
+            make_item("nasdaq:BTC", 100).with_features(score=3.0),  # 코인은 스케일이 크다
+            make_item("nasdaq:ETH", 100).with_features(score=2.0),
             make_item("krx:005930", 100).with_features(score=0.4),
             make_item("krx:000660", 100).with_features(score=0.1),
             make_item("nasdaq:AAPL", 100).with_features(score=0.3),
@@ -172,7 +172,7 @@ def test_rank_pools_are_split_by_market(ctx: RunContext):
     assert by_key["krx:005930"]["rank"] == 1
     assert by_key["krx:005930"]["universe_size"] == 2
     assert by_key["krx:005930"]["rank_pool"] == "krx"
-    assert by_key["upbit:KRW-BTC"]["rank"] == 1
+    assert by_key["nasdaq:BTC"]["rank"] == 1
     assert by_key["nasdaq:AAPL"]["rank_pool"] == "us"  # nasdaq·nyse는 한 풀이다
 
 
@@ -180,26 +180,26 @@ def test_cuts_are_taken_per_market(ctx: RunContext):
     """컷도 시장별이어야 한다. 섞어 자르면 나머지 시장이 통째로 사라진다."""
     bundle = Bundle(
         [
-            make_item("upbit:KRW-BTC", 100).with_features(score=3.0),
-            make_item("upbit:KRW-ETH", 100).with_features(score=2.0),
+            make_item("nasdaq:BTC", 100).with_features(score=3.0),
+            make_item("nasdaq:ETH", 100).with_features(score=2.0),
             make_item("krx:005930", 100).with_features(score=0.4),
             make_item("krx:000660", 100).with_features(score=0.1),
         ]
     )
     kept = top_n(rank_by(bundle, "score", ctx), 1, ctx)
 
-    assert {i.instrument.key for i in kept} == {"upbit:KRW-BTC", "krx:005930"}
+    assert {i.instrument.key for i in kept} == {"nasdaq:BTC", "krx:005930"}
 
 
 def test_top_pct_keeps_every_market(ctx: RunContext):
     bundle = Bundle(
-        [make_item(f"upbit:KRW-C{i}", 100).with_features(score=float(i)) for i in range(10)]
+        [make_item(f"nasdaq:C{i}", 100).with_features(score=float(i)) for i in range(10)]
         + [make_item("krx:005930", 100).with_features(score=0.4)]
     )
     kept = top_pct(rank_by(bundle, "score", ctx), 0.2, ctx)
 
     markets = [i.instrument.market for i in kept]
-    assert markets.count("crypto") == 2  # 10종목의 20%
+    assert markets.count("us") == 2  # 10종목의 20%
     assert markets.count("krx") == 1  # 1종목이라도 최소 1개는 남는다
 
 
@@ -207,20 +207,20 @@ def test_rank_ascending_for_low_is_good_factors(ctx: RunContext):
     """저변동성·저PBR 팩터는 작은 쪽이 좋다."""
     bundle = Bundle(
         [
-            make_item("upbit:KRW-BTC", 100).with_features(score=0.3),
-            make_item("upbit:KRW-ETH", 100).with_features(score=0.1),
+            make_item("nasdaq:BTC", 100).with_features(score=0.3),
+            make_item("nasdaq:ETH", 100).with_features(score=0.1),
         ]
     )
     ranked = rank_by(bundle, "score", ctx, descending=False)
-    assert ranked.items[0].instrument.symbol == "KRW-ETH"
+    assert ranked.items[0].instrument.symbol == "ETH"
 
 
 def test_rank_warns_when_scores_are_missing(ctx: RunContext):
     """조용히 빠지면 '유니버스 전체를 훑었다'는 전제가 깨진 걸 아무도 모른다."""
     bundle = Bundle(
         [
-            make_item("upbit:KRW-BTC", 100).with_features(score=0.3),
-            make_item("upbit:KRW-ETH", 100),  # score 없음
+            make_item("nasdaq:BTC", 100).with_features(score=0.3),
+            make_item("nasdaq:ETH", 100),  # score 없음
         ]
     )
     ranked = rank_by(bundle, "score", ctx)
@@ -231,12 +231,12 @@ def test_rank_warns_when_scores_are_missing(ctx: RunContext):
 
 def test_rank_without_score_feature_still_records_universe_size(ctx: RunContext):
     """단일 종목 전략도 표본 수는 남긴다."""
-    ranked = rank_by(Bundle([make_item("upbit:KRW-BTC", 100)]), None, ctx)
+    ranked = rank_by(Bundle([make_item("nasdaq:BTC", 100)]), None, ctx)
     assert ranked.items[0].features["universe_size"] == 1
 
 
 def test_top_n_and_top_pct_log_the_cut(ctx: RunContext):
-    bundle = Bundle([make_item(f"upbit:KRW-{i}0", 100) for i in range(1, 5)])
+    bundle = Bundle([make_item(f"nasdaq:{i}0", 100) for i in range(1, 5)])
     assert len(top_n(bundle, 2, ctx)) == 2
     assert len(top_pct(bundle, 0.5, ctx)) == 2
     assert len(top_pct(bundle, 0.01, ctx)) == 1  # 최소 1개는 남는다
@@ -253,7 +253,7 @@ def test_default_hooks_let_single_symbol_strategies_skip_rank(ctx: RunContext):
             return item.with_features(x=1)
 
     strategy = Minimal()
-    bundle = Bundle([strategy.compute(make_item("upbit:KRW-BTC", 100), None, ctx)])
+    bundle = Bundle([strategy.compute(make_item("nasdaq:BTC", 100), None, ctx)])
     params = strategy.Params()
     assert len(strategy.select(strategy.rank(bundle, params, ctx), params, ctx)) == 1
 

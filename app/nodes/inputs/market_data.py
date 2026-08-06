@@ -33,7 +33,7 @@ class MarketDataParams(BaseModel):
     instruments: list[str] = Field(
         default_factory=list,
         description=(
-            "venue:symbol 형식. 예: upbit:KRW-BTC, krx:005930. "
+            "venue:symbol 형식. 예: krx:005930, nasdaq:AAPL. "
             "비워 두면 상류 Symbol Universe가 정한 목록을 씁니다."
         ),
     )

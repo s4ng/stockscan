@@ -18,7 +18,7 @@ from app.engine.context import RunContext
 from app.engine.graph import PipelineValidationError, execution_levels, validate
 from app.engine.runner import NodeStatus, RunStatus, execute
 from app.engine.types import Bundle, Item, empty_ohlcv
-from app.market.calendar import Crypto24x7Calendar, krx_calendar, us_equity_calendar
+from app.market.calendar import krx_calendar, us_equity_calendar
 from app.market.instrument import InstrumentRef
 from app.market.timeframe import TIMEFRAMES
 from app.nodes.base import BaseNode
@@ -45,7 +45,7 @@ class _EmptyParams(BaseModel):
 
 
 def make_pipeline(**overrides) -> PipelineSpec:
-    instruments = overrides.pop("instruments", ["upbit:KRW-BTC", "upbit:KRW-ETH"])
+    instruments = overrides.pop("instruments", ["krx:005930", "krx:000660"])
     timeframe = overrides.pop("timeframe", "1d")
     condition = overrides.pop("condition", "above")
     return PipelineSpec(
@@ -95,32 +95,26 @@ def test_instrument_rejects_bare_symbol():
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("upbit:KRW-BTC", "KRW"),
-        ("upbit:BTC-ETH", "BTC"),  # 업비트에는 KRW 마켓만 있는 게 아니다
-        ("upbit:USDT-XRP", "USDT"),
-        ("binance:BTC/USDT", "USDT"),
-        ("binance:ETH/BTC", "BTC"),  # 바이낸스도 USDT 고정이 아니다
         ("krx:005930", "KRW"),
         ("nasdaq:AAPL", "USD"),
+        ("nyse:KO", "USD"),
     ],
 )
-def test_quote_currency_comes_from_symbol_not_venue(raw: str, expected: str):
-    """통화를 venue 상수로 박으면 코인 크로스 마켓에서 조용히 틀린다 (3.7)."""
+def test_quote_currency_comes_from_venue(raw: str, expected: str):
+    """주식은 venue가 통화를 고정한다 (3.7). 통화가 틀리면 표기와 비교가 함께 어긋난다."""
     assert InstrumentRef.parse(raw).quote_currency == expected
 
 
-def test_crypto_symbol_without_market_prefix_is_rejected():
-    with pytest.raises(ValueError, match="결제통화-기초자산"):
-        InstrumentRef.parse("upbit:BTC")
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("krx:005930", "krx"), ("nasdaq:AAPL", "us"), ("nyse:KO", "us")],
+)
+def test_market_groups_nasdaq_and_nyse_together(raw: str, expected: str):
+    """랭킹 풀의 어휘다 (규칙 17). nasdaq과 nyse를 나눌 이유가 없다."""
+    assert InstrumentRef.parse(raw).market == expected
 
 
 # ------------------------------------------------------------------------- 캘린더
-def test_crypto_calendar_is_always_open():
-    cal = Crypto24x7Calendar()
-    assert cal.is_open(NOW)
-    assert cal.last_closed_bar(NOW, "1h") == datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
-
-
 def test_krx_calendar_closed_on_weekend():
     cal = krx_calendar()
     saturday = datetime(2026, 3, 14, 5, 0, tzinfo=UTC)  # KST 14:00 토요일
@@ -185,7 +179,7 @@ def test_daily_and_weekly_timeframes_pass(timeframe: str):
 def test_timeframe_types_are_not_frozen():
     """정책 계층에서만 막는다 — 타입을 Literal["1d"]로 굳히면 되돌릴 수 없다 (3.6)."""
     assert "1h" in TIMEFRAMES  # 정규화 표는 그대로 살아 있다
-    assert Crypto24x7Calendar().last_closed_bar(NOW, "1h") is not None
+    assert krx_calendar().last_closed_bar(NOW, "1h") is not None
 
 
 def test_execution_levels_are_ordered():
@@ -217,7 +211,7 @@ async def test_run_is_deterministic():
 
 async def test_as_of_never_exceeds_now():
     """look-ahead 방어: 어떤 item도 실행 시각을 넘어선 봉을 기준으로 삼지 않는다."""
-    spec = make_pipeline(instruments=["upbit:KRW-BTC", "krx:005930", "nasdaq:AAPL"])
+    spec = make_pipeline(instruments=["krx:005930", "nasdaq:AAPL", "nyse:KO"])
     ctx = RunContext.create(settings=spec.settings, now=NOW)
     result = await execute(spec, ctx)
 
@@ -285,7 +279,7 @@ async def test_error_policy_route_sends_to_error_handle():
             NodeSpec(
                 id="data",
                 type="marketData",
-                params={"instruments": ["upbit:KRW-BTC"], "source": "does_not_exist"},
+                params={"instruments": ["krx:005930"], "source": "does_not_exist"},
                 on_error=OnError(policy=ErrorPolicy.ROUTE),
             ),
             NodeSpec(id="oops", type="logAlert"),
@@ -307,7 +301,7 @@ async def test_error_policy_fail_aborts_run():
             NodeSpec(
                 id="data",
                 type="marketData",
-                params={"instruments": ["upbit:KRW-BTC"], "source": "does_not_exist"},
+                params={"instruments": ["krx:005930"], "source": "does_not_exist"},
                 on_error=OnError(policy=ErrorPolicy.FAIL),
             ),
         ],
@@ -332,7 +326,7 @@ async def test_failed_run_does_not_consume_the_bar():
         NodeSpec(
             id="boom",
             type="marketData",
-            params={"instruments": ["upbit:KRW-BTC"], "source": "does_not_exist"},
+            params={"instruments": ["krx:005930"], "source": "does_not_exist"},
             on_error=OnError(policy=ErrorPolicy.FAIL),
         )
     )
@@ -421,7 +415,7 @@ def test_backtest_and_shadow_never_send(mode: ExecutionMode):
 async def test_bundle_merge_keeps_timeframes_apart():
     """같은 종목의 일봉·시간봉 item이 서로를 덮어쓰면 안 된다."""
     daily = Item(
-        instrument=InstrumentRef.parse("upbit:KRW-BTC"),
+        instrument=InstrumentRef.parse("krx:005930"),
         timeframe="1d",
         as_of=NOW,
         ohlcv=empty_ohlcv(),
@@ -441,7 +435,7 @@ async def test_source_fallback_is_recorded_in_run_history():
     class BrokenProvider(MarketDataProvider):
         id = "broken"
         display_name = "항상 실패하는 소스"
-        venues = ("upbit",)
+        venues = ("krx",)
         credential_schema = None
         capabilities = ProviderCapabilities(timeframes=("1d",))
 
@@ -451,9 +445,9 @@ async def test_source_fallback_is_recorded_in_run_history():
     registry = ProviderRegistry()
     registry.register(BrokenProvider())
     registry.register(SyntheticProvider())
-    registry.set_route("upbit", "*", ["broken", "synthetic"])
+    registry.set_route("krx", "*", ["broken", "synthetic"])
 
-    spec = make_pipeline(instruments=["upbit:KRW-BTC"])
+    spec = make_pipeline(instruments=["krx:005930"])
     ctx = RunContext.create(settings=spec.settings, now=NOW, providers=registry)
     result = await execute(spec, ctx)
 
