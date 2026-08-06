@@ -178,26 +178,78 @@ async def test_direct_source_never_touches_the_cache(maker):
     assert provider.calls == 2
 
 
-# -------------------------------------------------------------------- 스키마 드리프트
-async def test_schema_drift_is_raised_not_swallowed(tmp_path, monkeypatch: pytest.MonkeyPatch):
-    """★ 조용히 넘어가면 캐시가 영영 안 채워지는데 "좀 느리네"로만 보인다."""
+# -------------------------------------------------------------------- 스키마 넓히기
+async def test_missing_nullable_columns_are_added_not_fatal(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """★ **데이터를 지키면서 스키마를 넓힌다** (2026-08-06).
+
+    예전에는 컬럼이 모자라면 무조건 터뜨리고 "DB 파일을 지우면 재생성된다"고
+    안내했는데, 그 안내를 따르면 **`ohlcv_cache`가 통째로 날아간다** — 무료 소스가
+    막혀도 남는 유일한 자산이고(규칙 16) 사후 수익률 계산이 통째로 여기 얹혀 있다.
+    """
     import sqlite3
 
     from app.storage import db
 
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path)
-    # 컬럼이 모자란 옛 테이블을 흉내 낸다
+    # 컬럼이 모자란 옛 테이블 + 지켜야 할 데이터 한 줄
     conn.execute(
         "CREATE TABLE ingestion_jobs (venue TEXT, symbol TEXT, timeframe TEXT, "
         "adjusted BOOLEAN, PRIMARY KEY (venue, symbol, timeframe, adjusted))"
     )
+    conn.execute("INSERT INTO ingestion_jobs VALUES ('krx', '005930', '1d', 1)")
     conn.commit()
     conn.close()
 
     db.configure(f"sqlite+aiosqlite:///{path.as_posix()}")
     try:
-        with pytest.raises(db.SchemaDriftError, match="lookback"):
+        await db.init_db()  # 터지지 않는다
+
+        conn = sqlite3.connect(path)
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(ingestion_jobs)")}
+        rows = list(conn.execute("SELECT venue, symbol FROM ingestion_jobs"))
+        conn.close()
+
+        assert "lookback" in columns  # 넓어졌고
+        assert rows == [("krx", "005930")]  # 데이터는 그대로다
+    finally:
+        await db.dispose()
+        db.configure("sqlite+aiosqlite:///:memory:")
+
+
+async def test_init_db_is_idempotent(tmp_path):
+    """두 번 불러도 같은 컬럼을 두 번 더하려 하지 않는다."""
+    from app.storage import db
+
+    db.configure(f"sqlite+aiosqlite:///{(tmp_path / 'x.db').as_posix()}")
+    try:
+        await db.init_db()
+        await db.init_db()
+    finally:
+        await db.dispose()
+        db.configure("sqlite+aiosqlite:///:memory:")
+
+
+async def test_an_unaddable_column_still_raises(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """★ SQLite가 ADD COLUMN으로 못 만드는 것(PK·UNIQUE·기본값 없는 NOT NULL)은
+    사람이 판단할 일이다. 조용히 넘어가면 캐시가 영영 안 채워지는데 "좀 느리네"로만 보인다."""
+    import sqlite3
+
+    from app.storage import db
+
+    path = tmp_path / "narrow.db"
+    conn = sqlite3.connect(path)
+    # `signals`에서 UNIQUE 컬럼(dedup_key)이 빠진 옛 테이블.
+    # UNIQUE는 SQLite가 ADD COLUMN으로 만들 수 없다.
+    conn.execute("CREATE TABLE signals (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    db.configure(f"sqlite+aiosqlite:///{path.as_posix()}")
+    try:
+        with pytest.raises(db.SchemaDriftError, match="백업"):
             await db.init_db()
     finally:
         await db.dispose()

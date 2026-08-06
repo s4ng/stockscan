@@ -203,6 +203,35 @@ class SignalRow(Base):
     (4.8 오버라이드 추적). null은 아직 응답하지 않음.
     """
 
+    # ------------------------------------------------------------ 사후 수익률 (4.8)
+    #
+    # ★ **이 셋이 이 프로젝트의 제품이다.** 신호가 났다는 사실만 쌓으면 스크리너는
+    #   자신감 기계가 된다 — 사람은 맞은 종목만 기억하기 때문이다. 그걸 막는 유일한
+    #   숫자가 여기 있다.
+    #
+    # ⚠️ **아직 N봉이 안 지난 신호는 `NULL`로 둔다.** 0으로 채우면 최근 신호가 전부
+    #   "수익률 0%"로 잡혀 통계가 조용히 희석된다 — 없는 숫자를 지어내지 않는다(12.3).
+    #   집계는 `IS NOT NULL`로 거른다.
+    fwd_1: Mapped[float | None] = mapped_column(Float, default=None)
+    fwd_5: Mapped[float | None] = mapped_column(Float, default=None)
+    fwd_20: Mapped[float | None] = mapped_column(Float, default=None)
+    """`as_of`로부터 1·5·20 **봉** 뒤의 수익률 (비율, 0.021 = +2.1%).
+
+    ⚠️ **날짜가 아니라 봉으로 센다.** 휴장일 때문에 "20일 뒤"와 "20봉 뒤"는 다르고,
+    한국과 미국의 휴장일이 또 다르다. 날짜로 세면 시장마다 다른 것을 재게 된다.
+    """
+
+    fwd_base: Mapped[float | None] = mapped_column(Float, default=None)
+    """수익률의 분모 — `as_of` 봉의 종가.
+
+    **신호 당시 `meta`에 적힌 값이 아니라 캐시에서 다시 읽은 값이다.** 분자와 분모가
+    같은 소스에서 나와야 수정주가 정책이 바뀌어도 비율이 어긋나지 않는다 (3.8).
+    """
+
+    fwd_evaluated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
+    """마지막으로 평가기가 훑은 시각. 아직 안 본 신호와 "보았지만 봉이 모자란"
+    신호를 구분한다 — 구분하지 못하면 매번 전량을 다시 훑게 된다."""
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 

@@ -215,6 +215,16 @@ async def list_signals(
     return list((await session.scalars(stmt)).all())
 
 
+async def signalled_instruments(session: AsyncSession) -> list[str]:
+    """한 번이라도 신호가 난 종목 (규칙 18).
+
+    `ingest`가 수집 대상에 더한다 — 유니버스에서 밀렸다고 봉 수집이 끊기면
+    **하필 밀린 종목이 대개 내린 종목이라** 사후 수익률이 손실만 골라서 결측된다.
+    """
+    stmt = select(SignalRow.instrument).distinct().order_by(SignalRow.instrument)
+    return [str(row) for row in (await session.scalars(stmt)).all()]
+
+
 async def get_signal(session: AsyncSession, signal_id: int) -> SignalRow | None:
     return await session.get(SignalRow, signal_id)
 

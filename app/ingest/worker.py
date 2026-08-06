@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import TIMEFRAME, AppConfig, lookback_for
@@ -34,7 +35,8 @@ from app.market.instrument import InstrumentRef
 from app.pipeline import list_venue
 from app.providers.ohlcv_source import adjusted_of, predicted_adjusted
 from app.providers.registry import AUTO
-from app.storage import ohlcv_cache
+from app.storage import history, ohlcv_cache
+from app.storage.bar_state import sqlite_path
 from app.storage.models import IngestionJobRow
 from app.strategies.base import StrategyError
 from app.strategies.registry import load_strategy
@@ -136,6 +138,9 @@ async def plan_targets(
 
     ★ **수집 깊이도 전략에서 유도한다** — 설정의 `lookback`과 전략의
     `startup_candles`가 어긋나 종목이 통째로 워밍업 부족으로 빠지는 사고를 막는다.
+
+    ★ **한 번이라도 신호가 난 종목은 유니버스에서 밀려도 계속 모은다** (규칙 18).
+    아래 `_add_signalled` 참조.
     """
     plan = Plan()
     universe = await _resolve_universe(config, ctx, plan)
@@ -149,6 +154,8 @@ async def plan_targets(
             continue
         _add(seen, IngestTarget(instrument, TIMEFRAME, depth, end, "universe", AUTO))
 
+    await _add_signalled(seen, ctx, plan, depth)
+
     if include_delisted:
         await _add_delisted(seen, ctx, plan, lookback or 500, delisted_since)
 
@@ -158,6 +165,62 @@ async def plan_targets(
             "수집 대상이 없습니다. 설정의 universe가 비어 있지 않은지 확인하세요."
         )
     return plan
+
+
+async def _add_signalled(
+    seen: dict[tuple[str, str], IngestTarget], ctx: RunContext, plan: Plan, depth: int
+) -> None:
+    """★ 한 번이라도 신호가 난 종목은 수집을 멈추지 않는다 (규칙 18 / 3.9).
+
+    ⚠️ **유니버스에서 밀리는 종목은 대개 내린 종목이다.** 그래서 봉이 끊기는 쪽도
+    손실 신호에 몰리고, 그러면 **사후 수익률이 손실만 골라서 결측된다** — 성적표와
+    `backtest` 차트가 함께 조용히 낙관 편향된다. 채점의 정직성이 여기에 걸려 있다.
+
+    읽기 전용 명령이 DB를 만들면 안 되므로(12.1) **DB가 있을 때만** 본다. 없으면
+    신호도 없으니 더할 것도 없다.
+    """
+    from app.storage import db
+
+    if sqlite_path(db.database_url()) is not None and not _database_exists(db.database_url()):
+        return
+
+    try:
+        async with db.session_scope() as session:
+            keys = await history.signalled_instruments(session)
+    except SQLAlchemyError as exc:
+        # 신호 목록을 못 읽는 것으로 수집을 멈추지 않는다. 다만 조용히 넘기면
+        # 규칙 18이 꺼진 채로 도는 것을 아무도 모른다.
+        plan.notes.append(f"신호 이력을 읽지 못해 과거 신호 종목을 더하지 못했습니다: {exc}")
+        return
+
+    added = 0
+    for raw in keys:
+        try:
+            instrument = InstrumentRef.parse(raw)
+        except ValueError:
+            continue  # 옛 표기(코인 등). 지금 스키마로는 다룰 수 없다
+        if (instrument.venue, instrument.symbol) in seen:
+            continue
+        end = _last_closed(instrument, TIMEFRAME, ctx, plan)
+        if end is None:
+            continue
+        _add(seen, IngestTarget(instrument, TIMEFRAME, depth, end, "signal", AUTO))
+        added += 1
+
+    if added:
+        plan.notes.append(
+            f"유니버스에서 밀렸지만 과거에 신호가 났던 {added}종목을 수집 대상에 "
+            f"더했습니다 (규칙 18) — 봉이 끊기면 그 신호의 사후 수익률이 결측됩니다."
+        )
+
+
+def _database_exists(url: str) -> bool:
+    from pathlib import Path
+
+    if not url.startswith("sqlite"):
+        return True
+    path = url.split("///")[-1]
+    return path == ":memory:" or Path(path).exists()
 
 
 def _depth_for(config: AppConfig, plan: Plan) -> int:

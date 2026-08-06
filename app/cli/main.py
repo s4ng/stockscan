@@ -391,6 +391,62 @@ def alert_test(as_json: JsonOpt = False) -> None:
     )
 
 
+# ========================================================================= evaluate
+@cli.command()
+def evaluate(
+    limit: Annotated[
+        int, typer.Option("--limit", min=1, max=10000, help="한 번에 훑을 신호 수")
+    ] = 500,
+    as_json: JsonOpt = False,
+) -> None:
+    """신호의 **사후 수익률**을 채웁니다 (§4.8). ★ 이 프로젝트의 제품입니다.
+
+    `as_of`로부터 1·5·20봉 뒤 종가를 `ohlcv_cache`에서 찾아 `signals`에 적습니다.
+    **외부 호출이 없습니다** — 필요한 봉은 이미 캐시에 있습니다.
+
+    ⚠️ **아직 N봉이 안 지난 신호는 비워 둡니다.** 0으로 채우면 최근 신호가 전부
+    "수익률 0%"로 잡혀 통계가 조용히 희석됩니다. 시간이 지나면 다시 부르면 됩니다.
+
+    ⚠️ **봉이 끊긴 종목은 세어서 보여 줍니다.** 유니버스에서 밀린 종목은 대개 내린
+    종목이라, 조용히 빼면 **손실만 골라서 결측**됩니다 (규칙 18).
+    """
+    out = Out(as_json)
+    if not _database_exists():
+        out.emit(
+            {"ok": True, "scanned": 0, "filled": {}, "pending": 0, "missing_bars": []},
+            ["신호가 없습니다 (`run --commit`으로 먼저 기록하세요)."],
+        )
+        return
+
+    report = asyncio.run(_evaluate(limit))
+    filled = " · ".join(f"{k} {v}건" for k, v in report["filled"].items()) or "없음"
+    human = [
+        f"훑은 신호 {report['scanned']}건 · 새로 채움 {filled}",
+        f"아직 봉이 모자란 신호 {report['pending']}건 (시간이 지나면 채워집니다)",
+    ]
+    if report["missing_bars"]:
+        human.append(
+            f"⚠️ 봉이 없어 채우지 못한 종목 {len(report['missing_bars'])}개 — "
+            f"{', '.join(report['missing_bars'][:10])}"
+        )
+        human.append(
+            "   `marketscan ingest --commit`으로 봉을 쌓으세요. 밀린 종목은 대개 "
+            "내린 종목이라, 이대로 두면 성적표가 낙관 편향됩니다 (규칙 18)."
+        )
+    out.emit({"ok": True, **report}, human)
+
+
+async def _evaluate(limit: int) -> dict[str, Any]:
+    from app.evaluate import evaluate as run_evaluate
+
+    await db.init_db()
+    try:
+        async with db.session_scope() as session:
+            return (await run_evaluate(session, limit=limit)).to_dict()
+    finally:
+        await db.dispose()
+
+
 # =========================================================================== serve
 @cli.command()
 def serve() -> None:

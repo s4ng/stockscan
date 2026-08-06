@@ -64,6 +64,9 @@ class SchedulerState:
     acks: list[AckResponse] = field(default_factory=list)
     """버튼으로 받은 응답. 오버라이드 추적의 원자료다 (4.8)."""
 
+    last_evaluation: Any | None = None
+    """마지막 사후 수익률 평가 결과. 하트비트가 이걸 함께 보고한다."""
+
     @property
     def last_fire(self) -> Fire | None:
         return self.history[-1] if self.history else None
@@ -219,6 +222,9 @@ class Scheduler:
                 await self._send(f"⚠️ 실행 실패 [{entry.label()}] — {exc}")
                 return
             service.write_report(outcome, config, warnings.append)
+            # ★ 봉을 새로 받은 직후가 사후 수익률을 채우기 가장 좋은 시점이다 —
+            #   외부 호출이 없고(캐시만 읽는다) 이 실행이 방금 캐시를 넓혔다 (4.8).
+            await self._fill_forward_returns()
 
         fire = Fire(
             now,
@@ -233,6 +239,22 @@ class Scheduler:
                 _signal_message(entry, outcome), buttons=ack_buttons(outcome.signal_ids)
             )
 
+    async def _fill_forward_returns(self) -> None:
+        """신호의 사후 수익률을 채운다 (4.8). **실패해도 실행을 실패로 만들지 않는다.**
+
+        채점은 판단이 아니라 사후 집계다 — 여기서 터뜨리면 이미 끝난 실행(되돌릴 수
+        없는 봉 소비까지 포함해)이 실패로 기록된다.
+        """
+        from app.evaluate import evaluate as run_evaluate
+
+        try:
+            async with db.session_scope() as session:
+                report = await run_evaluate(session)
+        except Exception as exc:  # noqa: BLE001 - 집계 실패로 하루치를 버리지 않는다
+            self.state.error = f"사후 수익률 평가 실패 — {exc}"
+            return
+        self.state.last_evaluation = report
+
     async def _heartbeat(self, now: datetime) -> None:
         """★ 신호가 0건이어도 보낸다.
 
@@ -244,11 +266,21 @@ class Scheduler:
         signals = sum(f.signals for f in today)
         stamp = now.astimezone(_tz(self.state)).strftime("%m-%d %H:%M")
         tail = f"{last.label} {last.detail}" if last else "(아직 없음)"
-        await self._send(
-            f"✅ marketscan 살아 있습니다 ({stamp})\n"
-            f"오늘 실행 {len(today)}회 · 신호 {signals}건\n"
-            f"마지막: {tail}"
-        )
+
+        lines = [
+            f"✅ marketscan 살아 있습니다 ({stamp})",
+            f"오늘 실행 {len(today)}회 · 신호 {signals}건",
+            f"마지막: {tail}",
+        ]
+        # ⚠️ **봉이 끊겨 채우지 못한 종목은 하트비트에 싣는다.** 조용히 두면
+        #    성적표의 분모가 손실 쪽만 빠진 채로 굳는다 (규칙 18 / 4.8).
+        missing = getattr(self.state.last_evaluation, "missing_bars", None)
+        if missing:
+            lines.append(
+                f"⚠️ 봉이 끊겨 사후 수익률을 못 채운 종목 {len(missing)}개 — "
+                f"`marketscan ingest --commit`"
+            )
+        await self._send("\n".join(lines))
 
     async def _send(self, text: str, buttons: list[dict[str, Any]] | None = None) -> None:
         delivery = await self.channel.send(text, buttons)

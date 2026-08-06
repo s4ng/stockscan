@@ -25,8 +25,8 @@ from app.ingest import worker
 from app.market.instrument import InstrumentRef
 from app.providers.registry import ProviderRegistry
 from app.providers.synthetic import SyntheticProvider
-from app.storage import ohlcv_cache
-from app.storage.models import Base, IngestionJobRow
+from app.storage import history, ohlcv_cache
+from app.storage.models import Base, IngestionJobRow, SignalRow
 from tests.conftest import make_config
 
 NOW = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
@@ -176,6 +176,81 @@ async def test_conflicting_closes_surface_in_the_report(maker):
 
     report = await worker.ingest(plan, ctx, maker)
     assert any("다른소스" in c for c in report.conflicts)
+
+
+# ------------------------------------------------------- 규칙 18 (과거 신호 종목)
+async def test_signalled_instruments_keep_being_collected(monkeypatch, maker):
+    """★ 유니버스에서 밀리는 종목은 **대개 내린 종목**이다.
+
+    봉이 끊기면 그 신호의 사후 수익률이 결측되고, 하필 손실만 골라서 빠지므로
+    성적표가 조용히 낙관 편향된다. 채점의 정직성이 여기에 걸려 있다 (규칙 18).
+    """
+    from app.storage import db as db_module
+
+    async with maker() as session:
+        session.add(
+            SignalRow(
+                run_id="r1",
+                pipeline_id="p1",
+                node_id="persist",
+                dedup_key="k1",
+                instrument="nasdaq:TSLA",  # 유니버스(상위 2)에는 없는 종목
+                venue="nasdaq",
+                timeframe="1d",
+                as_of=NOW,
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(db_module, "database_url", lambda: "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setattr(db_module, "session_scope", _scope(maker))
+
+    plan = await worker.plan_targets(spec({"nasdaq": 2}), context())
+
+    keys = {t.instrument.key for t in plan.targets}
+    assert "nasdaq:TSLA" in keys
+    assert [t.origin for t in plan.targets if t.instrument.key == "nasdaq:TSLA"] == ["signal"]
+    assert any("규칙 18" in note for note in plan.notes)
+
+
+async def test_a_signalled_instrument_still_in_the_universe_is_not_duplicated(
+    monkeypatch, maker
+):
+    async with maker() as session:
+        session.add(
+            SignalRow(
+                run_id="r1",
+                pipeline_id="p1",
+                node_id="persist",
+                dedup_key="k1",
+                instrument="nasdaq:AAPL",  # 유니버스 상위에 이미 있다
+                venue="nasdaq",
+                timeframe="1d",
+                as_of=NOW,
+            )
+        )
+        await session.commit()
+
+    from app.storage import db as db_module
+
+    monkeypatch.setattr(db_module, "database_url", lambda: "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setattr(db_module, "session_scope", _scope(maker))
+
+    plan = await worker.plan_targets(spec({"nasdaq": 2}), context())
+
+    assert [t.instrument.key for t in plan.targets].count("nasdaq:AAPL") == 1
+    assert all(t.origin == "universe" for t in plan.targets)
+
+
+def _scope(maker):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def scope():
+        async with maker() as session:
+            yield session
+
+    return scope
 
 
 # ------------------------------------------------------------- 서바이버십 (4.8)

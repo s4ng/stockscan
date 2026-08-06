@@ -13,6 +13,7 @@ SQLAlchemy를 쓰는 이유는 SQLite 전용 문법을 피하기 위해서다. `
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +30,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import get_settings
 from app.storage.models import Base
+
+log = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -98,48 +101,135 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 
 class SchemaDriftError(RuntimeError):
-    """기존 DB에 모델의 컬럼이 없을 때. 사후에 조용히 망가지는 것을 앞당겨 터뜨린다."""
+    """기존 DB의 컬럼이 모자란데 **안전하게 더할 수 없을** 때.
+
+    사후에 조용히 망가지는 것을 앞당겨 터뜨린다 — 실제로 한 번 밟은 사고다.
+    모델에 컬럼을 추가하면 예전 DB는 그대로 남고, 그 DB에 INSERT하면
+    `OperationalError`가 나는데 캐시 쓰기 경로가 그걸 삼켜(`except SQLAlchemyError`)
+    **"조금 느린 것"처럼 보인다.** 실제로는 캐시가 영영 안 채워진다.
+    """
 
 
 async def init_db() -> None:
-    """테이블을 만들고, **기존 테이블의 컬럼이 모자라지 않은지 확인한다.**
+    """테이블을 만들고, **모자란 컬럼을 더한다.**
 
-    ⚠️ `create_all`은 **없는 테이블만 만든다.** 기존 테이블에 컬럼을 더하지 않으므로,
-    모델에 컬럼을 추가하면 예전 DB는 그대로 남는다. 그리고 그 DB에 INSERT를 하면
-    `OperationalError`가 나는데 캐시 쓰기 경로가 그걸 삼켜(`except SQLAlchemyError`)
-    **"조금 느린 것"처럼 보인다** — 실제로는 캐시가 영영 안 채워진다.
+    ⚠️ `create_all`은 **없는 테이블만 만든다.** 기존 테이블에 컬럼을 더하지 않으므로
+    모델을 넓히면 예전 DB가 뒤처진다.
 
-    실제로 한 번 밟은 사고라 여기서 앞당겨 터뜨린다. Alembic을 들이기 전까지의
-    임시방편이지만, 조용한 열화보다는 낫다.
+    ★ **nullable 컬럼은 `ADD COLUMN`으로 자동으로 붙인다** (2026-08-06).
+    예전에는 무조건 터뜨리고 "DB 파일을 지우면 재생성된다"고 안내했는데, 그 안내를
+    따르면 **`ohlcv_cache`가 통째로 날아간다** — 무료 소스가 막혀도 남는 유일한
+    자산이고(규칙 16) 사후 수익률 계산이 통째로 여기 얹혀 있다. 채점을 붙이려면
+    `signals`를 넓혀야 하는데, 그때마다 자산을 버리게 두면 안 된다.
+
+    **더할 수 없는 것만 터뜨린다** — SQLite는 `ADD COLUMN`으로 PK·UNIQUE를 만들 수
+    없고, NOT NULL은 기본값이 있어야 한다. 그런 변경은 사람이 판단할 일이다.
     """
     engine = get_engine()
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-        drift = await connection.run_sync(_missing_columns)
-    if drift:
-        detail = " · ".join(f"{t}: {', '.join(cols)}" for t, cols in sorted(drift.items()))
+        added, blocked = await connection.run_sync(_reconcile_columns)
+
+    if blocked:
+        detail = " · ".join(f"{t}: {', '.join(cols)}" for t, cols in sorted(blocked.items()))
         raise SchemaDriftError(
-            f"DB 스키마가 모델보다 낡았습니다 — 없는 컬럼: {detail}. "
-            f"`ohlcv_cache`·`signals`는 자산이므로 지우기 전에 백업하세요. "
-            f"캐시만 잃어도 된다면 DB 파일을 지우고 다시 실행하면 재생성됩니다."
+            f"DB 스키마가 모델보다 낡았고 자동으로 더할 수 없는 컬럼이 있습니다 — {detail}. "
+            f"PK·UNIQUE·NOT NULL(기본값 없음)은 SQLite가 ADD COLUMN으로 못 만듭니다. "
+            f"⚠️ `ohlcv_cache`·`signals`는 자산이므로 **지우기 전에 반드시 백업하세요**."
         )
+    if added:
+        for table, columns in sorted(added.items()):
+            log.info("스키마를 넓혔습니다 — %s에 %s 추가", table, ", ".join(columns))
 
 
-def _missing_columns(connection: object) -> dict[str, list[str]]:
-    """모델에는 있는데 실제 테이블에는 없는 컬럼."""
-    from sqlalchemy import inspect
+def _reconcile_columns(connection: object) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """모자란 컬럼을 더하고 `(더한 것, 못 더한 것)`을 돌려준다."""
+    from sqlalchemy import inspect, text
 
     inspector = inspect(connection)
     existing = set(inspector.get_table_names())
-    drift: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    blocked: dict[str, list[str]] = {}
+
     for name, table in Base.metadata.tables.items():
         if name not in existing:
             continue
         actual = {col["name"] for col in inspector.get_columns(name)}
-        missing = [c.name for c in table.columns if c.name not in actual]
-        if missing:
-            drift[name] = missing
-    return drift
+        for column in table.columns:
+            if column.name in actual:
+                continue
+            clause = _add_column_clause(column, connection)
+            if clause is None:
+                blocked.setdefault(name, []).append(column.name)
+                continue
+            connection.execute(text(f"ALTER TABLE {name} ADD COLUMN {clause}"))  # type: ignore[attr-defined]
+            added.setdefault(name, []).append(column.name)
+    return added, blocked
+
+
+def _add_column_clause(column: object, connection: object) -> str | None:
+    """`ADD COLUMN`에 넣을 조각. 안전하게 만들 수 없으면 None.
+
+    SQLite가 거부하는 것 셋: PRIMARY KEY · UNIQUE · **기본값 없는 NOT NULL**.
+
+    ⚠️ 마지막 것이 함정이다 — 모델의 `default=0`은 **파이썬 쪽** 기본값이라 DDL에
+    실리지 않는다. 그대로 `ADD COLUMN ... NOT NULL`을 보내면 SQLite가
+    "Cannot add a NOT NULL column with default value NULL"로 거부한다. 그래서
+    스칼라 기본값이 있으면 `DEFAULT`를 함께 실어 준다 — 기존 행이 받는 값이
+    새 행이 받을 값과 같아진다.
+    """
+    if column.primary_key or column.unique:  # type: ignore[attr-defined]
+        return None
+
+    # ⚠️ **테이블 수준 UNIQUE에 걸린 컬럼도 막는다.** `ADD COLUMN`은 컬럼만 만들고
+    #    제약은 만들지 않으므로, 그냥 붙이면 `signals.dedup_key`가 생겼는데
+    #    **중복 방지가 꺼진 채로 도는** 상태가 된다 — 같은 봉의 신호가 여러 번
+    #    쌓이고, 그러면 성적표의 분모가 조용히 부풀어 오른다 (4.5).
+    if any(
+        column.name in constraint.columns  # type: ignore[attr-defined]
+        for constraint in column.table.constraints  # type: ignore[attr-defined]
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    ):
+        return None
+
+    dialect = connection.engine.dialect  # type: ignore[attr-defined]
+    spec = f"{column.name} {column.type.compile(dialect)}"  # type: ignore[attr-defined]
+
+    literal = _default_literal(column)
+    if literal is not None:
+        spec += f" DEFAULT {literal}"
+    if not column.nullable and literal is not None:  # type: ignore[attr-defined]
+        spec += " NOT NULL"
+    # ⚠️ **NOT NULL인데 DDL에 실을 기본값이 없으면 제약을 빼고 붙인다.**
+    #
+    # `default=utcnow` 같은 콜러블은 행마다 값이 달라 DDL에 넣을 수 없다. 여기서
+    # 포기하면 사용자에게 남는 선택지가 "DB를 지운다"뿐인데, 그러면 `ohlcv_cache`가
+    # 통째로 날아간다(규칙 16). **제약이 조금 느슨한 것보다 자산을 잃는 쪽이 훨씬 나쁘다.**
+    #
+    # 실무상 안전한 이유: 값을 채우는 것은 ORM이고(파이썬 쪽 default가 매 INSERT마다
+    # 적용된다) 이 저장소에는 raw INSERT 경로가 없다. 새로 만드는 DB는 `create_all`이
+    # 원래의 엄격한 스키마로 만든다 — 느슨해지는 것은 **넓혀 온 DB뿐**이다.
+    return spec
+
+
+def _default_literal(column: object) -> str | None:
+    """DDL에 실을 수 있는 기본값. 콜러블·시퀀스면 None (그건 행마다 달라진다)."""
+    server_default = column.server_default  # type: ignore[attr-defined]
+    if server_default is not None and hasattr(server_default, "arg"):
+        return str(server_default.arg)
+
+    default = column.default  # type: ignore[attr-defined]
+    if default is None or not getattr(default, "is_scalar", False):
+        return None
+    value = default.arg
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return None
 
 
 @asynccontextmanager
