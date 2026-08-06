@@ -210,15 +210,25 @@ class TelegramChannel:
         return body
 
 
-def default_channel() -> AlertChannel:
-    """설정에 토큰이 있으면 텔레그램, 없으면 기록만 하는 채널.
+def default_channel(config: Any | None = None) -> AlertChannel:
+    """토큰이 있으면 텔레그램, 없으면 기록만 하는 채널.
+
+    ⚠️ **`config`를 반드시 넘긴다.** 토큰은 2026-08-06부터 `config.yml`의
+    `telegram:`에 사는데, 여기서 환경변수만 보면 **설정에 토큰을 적어 둔 사람의
+    알림이 영영 안 나간다.** 게다가 `describe`는 설정을 읽어 "알림 telegram"이라고
+    표시하므로 **화면과 실제가 어긋난 채로 조용히 돈다** — 실제로 밟은 사고다.
+
+    `config`가 없으면 환경변수만 본다(설정을 아직 못 읽은 경로의 최후 수단).
 
     **토큰이 없다고 실패시키지 않는다.** 알림 없이 도는 `serve`도 유효한 사용이고,
-    시작할 때 "기록만 한다"고 경고가 나간다.
+    시작할 때 "기록만 한다"고 경고가 나간다 (12.3).
     """
-    settings = get_settings()
-    token = (settings.telegram_token or "").strip()
-    chat_id = (settings.telegram_chat_id or "").strip()
+    if config is not None:
+        token, chat_id = config.telegram.resolved()
+    else:
+        settings = get_settings()
+        token = (settings.telegram_token or "").strip()
+        chat_id = (settings.telegram_chat_id or "").strip()
     if token and chat_id:
         return TelegramChannel(token=token, chat_id=chat_id)
     return LogChannel()

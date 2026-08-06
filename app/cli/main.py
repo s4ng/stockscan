@@ -373,11 +373,12 @@ def alert_test(as_json: JsonOpt = False) -> None:
     **채널을 시험하려고 명시적으로** 부른 것이고, 신호가 아니라 테스트 문구를 보냅니다.
     """
     out = Out(as_json)
-    channel = default_channel()
+    channel = default_channel(_channel_config(out))
     if channel.id == "log":
         out.fail(
             ExitCode.VALIDATION,
-            "보낼 채널이 없습니다 — STOCKSCAN_TELEGRAM_TOKEN·STOCKSCAN_TELEGRAM_CHAT_ID를 "
+            "보낼 채널이 없습니다 — 설정의 telegram.token·chat_id를 채우거나 "
+            "STOCKSCAN_TELEGRAM_TOKEN·STOCKSCAN_TELEGRAM_CHAT_ID를 "
             f"설정하세요 ({get_settings().resolve('.env')} 또는 환경변수).",
         )
     stamp = format_time(datetime.now(UTC))
@@ -456,9 +457,9 @@ def _render_scorecard(payload: dict[str, Any]) -> str:
 def _send_now(out: Out, text: str) -> None:
     """⚠️ 예외적으로 바깥으로 나갑니다 — 사람이 `--send`로 **명시적으로** 부른 것이고,
     신호가 아니라 집계입니다 (12.2의 "알림은 serve만"이 겨누는 것은 신호 알림입니다)."""
-    channel = default_channel()
+    channel = default_channel(_channel_config(out))
     if channel.id == "log":
-        out.warn("보낼 채널이 없어 화면에만 냅니다 (텔레그램 토큰 미설정).")
+        out.warn("보낼 채널이 없어 화면에만 냅니다 (설정의 telegram이 비었습니다).")
         return
     delivery = asyncio.run(channel.send(text))
     if not delivery.ok:
@@ -545,13 +546,18 @@ def serve() -> None:
 
     # 스케줄이 없거나 채널이 없으면 **시작할 때** 말한다. 하루가 지난 뒤
     # "왜 아무것도 안 왔지"가 되면 늦다 (미구현을 성공처럼 보이지 않게 한다).
+    #
+    # ★ 설정을 **한 번만** 읽는다. 두 번 읽으면 스케줄과 채널이 서로 다른 설정을
+    #   볼 수 있고, 그 어긋남은 화면에 드러나지 않는다.
     try:
-        schedule = Schedule.from_config(app_config.load())
-    except Exception as exc:  # noqa: BLE001
-        schedule = None
-        out.warn(f"설정을 읽지 못해 스케줄이 돌지 않습니다 — {exc}")
+        config = app_config.load()
+    except ConfigError as exc:
+        out.fail(ExitCode.VALIDATION, f"설정을 읽지 못했습니다 — {exc}")
+        raise
+
+    schedule = Schedule.from_config(config)
     if schedule is None:
-        out.warn("설정에 scheduleTrigger가 없어 아무것도 돌지 않습니다.")
+        out.warn("설정의 schedule.at이 비어 있어 아무것도 돌지 않습니다.")
         raise typer.Exit(int(ExitCode.VALIDATION))
 
     for line in schedule.describe():
@@ -559,13 +565,16 @@ def serve() -> None:
     if schedule.heartbeat is None:
         out.warn(
             "하트비트가 없습니다. 프로세스가 조용히 죽으면 '신호 0건'과 구분되지 "
-            "않습니다 — scheduleTrigger에 heartbeat를 넣으세요."
+            "않습니다 — 설정의 schedule.heartbeat를 넣으세요."
         )
-    channel = default_channel()
+    # ★ **설정에서 채널을 만든다.** 환경변수만 보면 `config.yml`에 토큰을 적어 둔
+    #   사람의 알림이 영영 안 나가는데, `describe`는 설정을 읽어 "알림 telegram"이라고
+    #   표시하므로 **화면과 실제가 어긋난 채 조용히 돈다** (실제로 밟은 사고다).
+    channel = default_channel(config)
     if channel.id == "log":
         out.warn(
             "텔레그램 토큰이 없어 알림을 **기록만** 합니다 (아무 데도 안 갑니다). "
-            "STOCKSCAN_TELEGRAM_TOKEN·STOCKSCAN_TELEGRAM_CHAT_ID를 설정하세요."
+            "설정의 telegram.token·chat_id를 채우세요."
         )
 
     out.progress("상주 실행을 시작합니다. 종료는 Ctrl+C.")
@@ -1183,6 +1192,19 @@ def _data_origin(data: dict[str, Any]) -> str:
     source = data.get("source")
     cached = data.get("cached_sources") or []
     return f"{source}({', '.join(cached)})" if cached else str(source)
+
+
+def _channel_config(out: Out) -> AppConfig | None:
+    """알림 채널을 만들 설정. 못 읽으면 None (환경변수로 물러선다).
+
+    설정을 못 읽는 것이 알림 시험을 막을 이유는 아니다 — 환경변수만으로도 채널은
+    열릴 수 있다.
+    """
+    try:
+        return app_config.load()
+    except ConfigError as exc:
+        out.warn(f"설정을 읽지 못해 환경변수만 봅니다 — {exc}")
+        return None
 
 
 def _load_config(out: Out, path: Path | None) -> AppConfig:

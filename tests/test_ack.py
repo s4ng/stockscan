@@ -22,7 +22,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.alerts import AckResponse, LogChannel, ack_buttons, parse_ack
+from app.alerts import AckResponse, LogChannel, ack_buttons, default_channel, parse_ack
 from app.engine.signals import SignalDraft
 from app.storage import history
 from app.storage.models import Base, SignalRow
@@ -222,3 +222,51 @@ def _scope(maker):
             yield session
 
     return scope
+
+
+# ------------------------------------------------------------------ 채널 결정
+def test_the_channel_comes_from_the_config_not_only_the_env(monkeypatch):
+    """★ 실제로 밟은 사고다 (2026-08-06).
+
+    토큰은 `config.yml`의 `telegram:`에 사는데 `default_channel()`이 환경변수만
+    보고 있었다. 그래서 서버(`.env` 없음)에서 **알림이 영영 안 나갔는데**,
+    `describe`는 설정을 읽어 "알림 telegram"이라고 표시했다 — **화면과 실제가
+    어긋난 채 조용히 도는** 것이 정확히 이 프로젝트가 막으려는 실패다.
+    """
+    from app.config import AppConfig
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "telegram_token", None)
+    monkeypatch.setattr(settings, "telegram_chat_id", None)
+
+    config = AppConfig.model_validate(
+        {
+            "strategy": "demo_momentum",
+            "universe": {"nasdaq": 1},
+            "telegram": {"token": "123:ABC", "chat_id": "42"},
+        }
+    )
+
+    assert default_channel(config).id == "telegram"
+    assert default_channel(None).id == "log"  # 환경변수만 보면 못 찾는다
+
+
+def test_placeholder_tokens_are_not_treated_as_real(monkeypatch):
+    """`<봇 토큰>`을 그대로 두고 돌리는 일이 흔하다. 진짜로 취급하면 매 전송이
+    실패하면서 원인이 "토큰이 틀렸다"로 보인다."""
+    from app.config import AppConfig
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "telegram_token", None)
+    monkeypatch.setattr(settings, "telegram_chat_id", None)
+
+    config = AppConfig.model_validate(
+        {
+            "strategy": "demo_momentum",
+            "universe": {"nasdaq": 1},
+            "telegram": {"token": "<봇 토큰>", "chat_id": "<채팅 ID>"},
+        }
+    )
+    assert default_channel(config).id == "log"
