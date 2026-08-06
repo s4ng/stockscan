@@ -50,8 +50,16 @@ class FakeOutcome:
     def __init__(self, written: int) -> None:
         self.written = written
         self.signals: list[dict[str, Any]] = [
-            {"instrument": "krx:005930", "display_name": "삼성전자", "features": {"rank": 1}}
+            {
+                "instrument": "krx:005930",
+                "display_name": "삼성전자",
+                "close": 80000,
+                "change_pct": 0.0234,
+                "strategy_id": "trend_breakout_55",
+                "features": {"rank": 1, "rank_pool": "krx", "trend_strength": 3.409},
+            }
         ] * written
+        self.signal_ids = list(range(1, written + 1))
         self.result = None
         self.committed = True
 
@@ -183,6 +191,26 @@ async def test_signals_are_sent_but_zero_signals_are_not():
 
     assert quiet_channel.sent == []
     assert "신호 3건" in loud_channel.sent[0].text
+
+
+@pytest.mark.asyncio
+async def test_the_alert_carries_price_and_reason_not_just_a_rank():
+    """★ 종목명과 등수만으로는 행동으로 이어지지 않는다.
+
+    이 알림을 받고 할 수 있는 다음 행동이 있어야 한다 — 값(종가·등락)과 근거,
+    그리고 되짚을 수단(`explain`)이 함께 실려야 한다.
+    """
+    scheduler, channel, _ = make_scheduler(written=1)
+
+    await scheduler.tick(datetime(2026, 8, 4, 6, 30, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
+
+    text = channel.sent[0].text
+    assert "삼성전자" in text
+    assert "80,000" in text  # 값
+    assert "trend_strength" in text  # 근거
+    assert "krx 1위" in text
+    assert "marketscan explain 1" in text  # 되짚을 수단
 
 
 @pytest.mark.asyncio

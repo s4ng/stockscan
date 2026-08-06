@@ -134,6 +134,12 @@ class RunOutcome:
     written: int
     report: Path | None = None
 
+    signal_ids: list[int] = field(default_factory=list)
+    """기록된 `signals.id`. **dry-run에서는 비어 있다** — 행이 없으니 id도 없다.
+
+    알림의 `[샀다/안 샀다]` 버튼이 이 값을 실어 보낸다 (4.8 오버라이드 추적).
+    """
+
 
 async def execute_run(
     spec: PipelineSpec,
@@ -202,6 +208,7 @@ async def execute_run(
         signals=[d.to_dict() for d in drafts],
         committed=commit,
         written=getattr(sink, "written", len(drafts)),
+        signal_ids=list(getattr(sink, "ids", [])),
     )
 
 

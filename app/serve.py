@@ -18,13 +18,16 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from itertools import zip_longest
 from typing import Any
 
 from app import service
-from app.alerts import AlertChannel, Delivery
+from app.alerts import AckResponse, AlertChannel, Delivery, ack_buttons
 from app.cli import pipeline_file
+from app.core.formatting import format_price_change
 from app.schedule import Schedule, ScheduleEntry, moments_around
 from app.schemas.pipeline import PipelineSpec
+from app.storage import db, history
 
 #: 다음 발화까지 남았어도 이만큼마다 깨어난다.
 #:
@@ -57,6 +60,9 @@ class SchedulerState:
     started_at: datetime | None = None
     skipped_on_start: list[str] = field(default_factory=list)
     """시작 시각보다 앞서 있던 오늘의 슬롯. **몰아서 부르지 않고 건너뛴다.**"""
+
+    acks: list[AckResponse] = field(default_factory=list)
+    """버튼으로 받은 응답. 오버라이드 추적의 원자료다 (4.8)."""
 
     @property
     def last_fire(self) -> Fire | None:
@@ -155,7 +161,40 @@ class Scheduler:
         if self.heartbeat_due(schedule, now):
             await self._heartbeat(now)
 
+        # ★ 발화와 무관하게 매 tick 걷는다. 사용자가 버튼을 누르는 시각은 슬롯과
+        #   아무 상관이 없고, 안 걷으면 텔레그램이 24시간 뒤 그 응답을 버린다.
+        await self.collect_acks()
+
         self._since = now
+
+    async def collect_acks(self) -> int:
+        """`[샀다/안 샀다]` 응답을 `signals.acted`에 쓴다 (4.8 오버라이드 추적).
+
+        ⚠️ **이것은 `--commit`의 부작용 셋(알림·signals 기록·봉 소비)에 들어가지 않는다.**
+        규칙 11이 막는 것은 되돌릴 수 없는 것인데, `acted`는 잘못 눌러도 반대로
+        다시 누르면 그만이라 아무것도 영영 잃게 만들지 않는다.
+        """
+        acks = await self.channel.poll_acks()
+        if not acks:
+            return 0
+
+        await db.init_db()
+        written = 0
+        for ack in acks:
+            async with db.session_scope() as session:
+                row = await history.set_acted(session, ack.signal_id, ack.acted)
+            verdict = "샀다" if ack.acted else "안 샀다"
+            if row is None:
+                # 신호가 없어졌다(DB 교체 등). 조용히 넘기면 사용자는 기록된 줄 안다.
+                await self.channel.confirm_ack(
+                    ack.callback_id, f"신호 {ack.signal_id}을(를) 찾지 못했습니다"
+                )
+                continue
+            await self.channel.confirm_ack(ack.callback_id, f"기록했습니다 — {verdict}")
+            self.state.acks.append(ack)
+            written += 1
+        del self.state.acks[:-50]
+        return written
 
     async def _fire(self, entry: ScheduleEntry, now: datetime) -> None:
         try:
@@ -192,7 +231,9 @@ class Scheduler:
         )
         self.state.record(fire)
         if outcome.written:
-            await self._send(_signal_message(entry, outcome))
+            await self._send(
+                _signal_message(entry, outcome), buttons=ack_buttons(outcome.signal_ids)
+            )
 
     async def _heartbeat(self, now: datetime) -> None:
         """★ 신호가 0건이어도 보낸다.
@@ -211,8 +252,8 @@ class Scheduler:
             f"마지막: {tail}"
         )
 
-    async def _send(self, text: str) -> None:
-        delivery = await self.channel.send(text)
+    async def _send(self, text: str, buttons: list[dict[str, Any]] | None = None) -> None:
+        delivery = await self.channel.send(text, buttons)
         self.state.deliveries.append(delivery)
         del self.state.deliveries[:-50]
 
@@ -234,13 +275,56 @@ def _tz(state: SchedulerState) -> Any:
 
 
 def _signal_message(entry: ScheduleEntry, outcome: service.RunOutcome) -> str:
-    lines = [f"📈 신호 {outcome.written}건 [{entry.label()}]"]
-    for signal in outcome.signals[:10]:
-        features = signal.get("features") or {}
-        lines.append(
-            f"· {signal['instrument']} {signal.get('display_name') or ''}"
-            f" — {features.get('rank_pool') or '-'} {features.get('rank') or '-'}위"
-        )
+    """알림 본문.
+
+    ★ **종목명과 순위만으로는 행동으로 이어지지 않는다.** 모르는 종목의 등수를 받으면
+    할 수 있는 다음 행동이 없다. 그래서 값(종가·등락)과 근거(전략이 남긴 feature)를
+    함께 싣고, 되짚을 수 있게 `explain` 명령을 그대로 적어 준다.
+    """
+    strategy = (outcome.signals[0].get("strategy_id") if outcome.signals else None) or "-"
+    lines = [f"📈 {strategy} — 신호 {outcome.written}건 [{entry.label()}]", ""]
+
+    for signal, signal_id in zip_longest(outcome.signals[:10], outcome.signal_ids[:10]):
+        if signal is None:
+            break
+        name = signal.get("display_name") or signal["instrument"]
+        price = format_price_change(signal.get("close"), signal.get("change_pct"))
+        head = f"· {name} ({signal['instrument']})"
+        lines.append(f"{head}  {price}" if price.strip() else head)
+
+        reason = _reason(signal.get("features") or {})
+        if reason:
+            lines.append(f"   {reason}")
+        if signal_id is not None:
+            lines.append(f"   marketscan explain {signal_id}")
+
     if outcome.written > 10:
         lines.append(f"… 외 {outcome.written - 10}건")
     return "\n".join(lines)
+
+
+#: 알림에 싣지 않는 feature. 순위 관련 값은 아래에서 따로 한 줄로 만든다.
+_RANK_KEYS = {"rank", "rank_pool", "universe_size", "percentile"}
+
+
+def _reason(features: dict[str, Any]) -> str:
+    """"왜 떴는가"를 한 줄로. 순위 + 전략이 남긴 값 두어 개.
+
+    전략마다 feature 이름이 다르므로 **여기서 이름을 알지 못한다** — 알려고 들면
+    전략이 늘 때마다 이 함수를 고쳐야 하고, 고치는 것을 잊으면 알림이 조용히
+    빈약해진다. 그래서 순위만 이름으로 집고 나머지는 앞에서부터 싣는다.
+    """
+    parts: list[str] = []
+    rank = features.get("rank")
+    pool, size = features.get("rank_pool"), features.get("universe_size")
+    if rank is not None:
+        parts.append(f"{pool or '?'} {rank}위" + (f"/{size}" if size else ""))
+
+    for key, value in features.items():
+        if key in _RANK_KEYS or len(parts) >= 4:
+            continue
+        if isinstance(value, float):
+            parts.append(f"{key}={value:.4g}")
+        elif isinstance(value, (int, str, bool)):
+            parts.append(f"{key}={value}")
+    return " · ".join(parts)

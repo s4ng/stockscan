@@ -42,34 +42,42 @@ class SqlSignalSink:
         self.drafts: list[SignalDraft] = []
         """실제로 기록된 신호. CLI가 dry-run과 같은 형태로 결과를 보여 주기 위해 쓴다."""
 
+        self.ids: list[int] = []
+        """기록된 행의 id. `drafts`와 같은 순서다.
+
+        알림의 `[샀다/안 샀다]` 버튼이 이 값을 콜백에 실어 보낸다 — id가 없으면
+        응답이 어느 신호에 대한 것인지 정할 수 없어 `acted`를 채울 수 없다 (4.8).
+        """
+
     async def emit(self, draft: SignalDraft) -> bool:
         async with self._sessionmaker() as session:
-            session.add(
-                SignalRow(
-                    run_id=draft.run_id,
-                    pipeline_id=draft.pipeline_id,
-                    node_id=draft.node_id,
-                    dedup_key=draft.dedup_key,
-                    instrument=draft.instrument,
-                    venue=draft.venue,
-                    timeframe=draft.timeframe,
-                    as_of=draft.as_of,
-                    kind=draft.kind,
-                    strategy_id=draft.strategy_id,
-                    strategy_sha256=draft.strategy_sha256,
-                    features=draft.features,
-                    tags=draft.tags,
-                    meta=draft.meta,
-                )
+            row = SignalRow(
+                run_id=draft.run_id,
+                pipeline_id=draft.pipeline_id,
+                node_id=draft.node_id,
+                dedup_key=draft.dedup_key,
+                instrument=draft.instrument,
+                venue=draft.venue,
+                timeframe=draft.timeframe,
+                as_of=draft.as_of,
+                kind=draft.kind,
+                strategy_id=draft.strategy_id,
+                strategy_sha256=draft.strategy_sha256,
+                features=draft.features,
+                tags=draft.tags,
+                meta=draft.meta,
             )
+            session.add(row)
             try:
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
                 self.duplicates += 1
                 return False
+            signal_id = row.id
         self.written += 1
         self.drafts.append(draft)
+        self.ids.append(signal_id)
         return True
 
 
