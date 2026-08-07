@@ -27,11 +27,11 @@
 
 | 명령 | 설명 |
 | :--- | :--- |
-| `serve` | 평소엔 이것만 띄워 둠. 스케줄·알림·성적표를 알아서 돌림 |
-| `run` | 오늘의 후보를 뽑음 |
-| `evaluate` | 신호의 사후 수익률을 채움 |
-| `scorecard` | 성적표. 신호를 전부 샀다고 치고 승률·기저율·벤치마크 대비 |
-| `backtest` | 한 종목을 하루씩 되감아 조건 충족일을 차트에 찍음 |
+| `serve` | 평소엔 이것만 띄워 둔다. 스케줄·알림·성적표를 알아서 돌린다 |
+| `run` | 오늘의 후보를 뽑는다 |
+| `evaluate` | 신호의 사후 수익률을 채운다 |
+| `scorecard` | 성적표. 신호를 전부 샀다고 치고 승률·기저율·벤치마크 대비를 낸다 |
+| `backtest` | 한 종목을 하루씩 되감아 조건 충족일을 차트에 찍는다 |
 
 - 설계문서: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - 작업규칙: [CLAUDE.md](./CLAUDE.md)
@@ -40,15 +40,15 @@
 
 ```bash
 uv sync
-mkdir -p ~/.stockscan && cp sample/* ~/.stockscan/   # 설정과 전략은 한 벌
+mkdir -p ~/.stockscan && cp sample/* ~/.stockscan/   # 설정과 전략은 한 벌이다
 uv run stockscan describe
 
-# 어디서든 `stockscan ...`으로 호출하려면
-uv tool install .                                    # stockscan 명령을 PATH에 올림
+# 어디서든 `stockscan ...`으로 부르려면
+uv tool install .                                    # stockscan 명령을 PATH에 올린다
 stockscan describe
 ```
 
-설정 파일 `~/.stockscan/config.yml`
+설정 파일은 `~/.stockscan/config.yml`이다.
 
 ```yaml
 timezone: Asia/Seoul
@@ -69,10 +69,8 @@ telegram:
   chat_id: "<채팅 ID>"
 ```
 
-전략 파일 `~/.stockscan/<이름>.py`
-
-설정 파일 **옆**에 둠. 설정과 전략은 한 벌이라 통째로 복사·백업할 수 있어야 함.
-`sample/trend_breakout_55.py`가 다 채운 예시.
+전략 파일은 `~/.stockscan/<이름>.py`로, 설정 파일 **옆**에 둔다. 설정과 전략은 한 벌이라
+통째로 복사·백업할 수 있어야 하기 때문이다. 다 채운 예시는 `sample/trend_breakout_55.py`에 있다.
 
 ```bash
 stockscan strategy new my_strategy    # ~/.stockscan/my_strategy.py 템플릿
@@ -81,13 +79,13 @@ stockscan strategy check my_strategy  # 미래를 보는 코드가 없는지 AST
 
 ```python
 class MyStrategy(Strategy):
-    id = "my_strategy"        # 파일 이름과 같아야 함 (해시가 파일 단위라서)
-    startup_candles = 253     # 이만큼 못 채운 종목은 제외됨. 수집 깊이가 여기서 나옴
+    id = "my_strategy"        # 파일 이름과 같아야 한다 (해시가 파일 단위라서)
+    startup_candles = 253     # 이만큼 못 채운 종목은 제외된다. 수집 깊이가 여기서 나온다
 
-    score_feature = "score"   # 이걸 선언하면 기본 rank가 순위·백분위를 채워 줌
+    score_feature = "score"   # 이걸 선언하면 기본 rank가 순위·백분위를 채워 준다
     score_descending = True
 
-    class Params(BaseModel):  # 파라미터는 여기가 정본. config.yml에 안 적음
+    class Params(BaseModel):  # 파라미터는 여기가 정본이다. config.yml에는 적지 않는다
         window: int = Field(default=252, ge=2, le=1000, description="모멘텀 기간(봉)")
         top_n: int = Field(default=10, ge=1, le=200, description="시장당 최대 후보")
 
@@ -95,21 +93,21 @@ class MyStrategy(Strategy):
         close = item.ohlcv["close"]
         return item.with_features(score=float(close.iloc[-1] / close.iloc[-1 - p.window] - 1))
 
-    def select(self, bundle, p, ctx):     # 최종 컷 (rank는 기본 구현으로 충분)
+    def select(self, bundle, p, ctx):     # 최종 컷 (rank는 기본 구현으로 충분하다)
         return top_n(bundle, p.top_n, ctx)
 ```
 
-- **파일 하나에 전략 하나.** `compute`(종목별) → `rank`(횡단면) → `select`(컷) 순서.
-  단일 종목 전략이면 `compute`만 채우고 나머지는 기본 구현을 씀.
-- ⚠️ **`compute`는 과거만 봐야 함.** `rolling`·`ewm`·`shift(+n)`은 안전하고,
-  `shift(-n)`·`center=True`·`bfill`은 미래를 봄. 백테스트를 통째로 무너뜨리는
-  가장 흔한 경로라 `strategy check`가 잡지만, 통과가 보장은 아님.
-- 파라미터를 백테스트로 골라 넣지 않음. 검증된 팩터의 표준값을 쓰고 "왜 이 값인가"를
-  docstring에 적음. 자세한 건 [CLAUDE.md](./CLAUDE.md)의 "백테스트를 대하는 자세".
-- 컷은 `top_n` / `top_pct` 헬퍼로. 조용히 자르면 몇 개를 버렸는지 아무도 모름.
+- **파일 하나에 전략 하나다.** `compute`(종목별) → `rank`(횡단면) → `select`(컷) 순서로
+  채운다. 단일 종목 전략이면 `compute`만 채우고 나머지는 기본 구현을 쓰면 된다.
+- ⚠️ **`compute`는 과거만 봐야 한다.** `rolling`·`ewm`·`shift(+n)`은 안전하지만
+  `shift(-n)`·`center=True`·`bfill`은 미래를 본다. 백테스트를 통째로 무너뜨리는 가장
+  흔한 경로라 `strategy check`가 잡아 주는데, 통과가 곧 보장은 아니다.
+- 파라미터를 백테스트로 골라 넣지 않는다. 검증된 팩터의 표준값을 쓰고 "왜 이 값인가"를
+  docstring에 적는다. 자세한 건 [CLAUDE.md](./CLAUDE.md)의 "백테스트를 대하는 자세"에 있다.
+- 컷은 `top_n` / `top_pct` 헬퍼로 한다. 조용히 자르면 몇 개를 버렸는지 아무도 모른다.
 
 ```bash
-stockscan run                  # 후보 뽑기. 기본은 dry-run이라 아무것도 안 남음
+stockscan run                  # 후보 뽑기. 기본은 dry-run이라 아무것도 남지 않는다
 stockscan run --commit         # signals 기록 + 봉 소비
 stockscan ingest --commit      # 일봉·지수 수집
 stockscan evaluate             # 사후 수익률 채우기
@@ -121,13 +119,13 @@ stockscan serve                # 상주
 
 알아 둘 것 몇 가지.
 
-- 알림은 `serve`에서만 나감. 손으로 `run`을 돌린다고 텔레그램이 오지는 않음.
-- **주말에는 발화도 하트비트도 안 함.** 설정 항목이 아니라 기본값.
-  기준은 UTC라 **토요일 새벽의 미국장 슬롯(06:10)은 그대로 돎** — 그게 금요일 장이라서.
-- 성적표는 그 구간 신호를 **전부 샀다고 가정**한 값임. 무엇을 실제로 샀는지는 안 물어봄.
-- `explain`, `signals`, `stats`, `describe`는 읽기만 함. DB 파일도 안 만듦.
-- 종료 코드는 0(성공, 신호 0건 포함) / 2(소스 실패) / 3(검증 실패).
-- 모든 명령에 `--help`와 `--json`이 있음.
+- 알림은 `serve`에서만 나간다. 손으로 `run`을 돌린다고 텔레그램이 오지는 않는다.
+- **주말에는 발화도 하트비트도 하지 않는다.** 설정 항목이 아니라 기본값이다.
+  기준이 UTC라 **토요일 새벽의 미국장 슬롯(06:10)은 그대로 돈다** — 그게 금요일 장이기 때문이다.
+- 성적표는 그 구간 신호를 **전부 샀다고 가정**한 값이다. 무엇을 실제로 샀는지는 묻지 않는다.
+- `explain`, `signals`, `stats`, `describe`는 읽기만 한다. DB 파일도 만들지 않는다.
+- 종료 코드는 0(성공, 신호 0건 포함) / 2(소스 실패) / 3(검증 실패)이다.
+- 모든 명령에 `--help`와 `--json`이 있다.
 
 ## Development
 
@@ -138,40 +136,40 @@ uv run ruff check app tests
 ```
 
 > [!NOTE]
-> `pykrx`가 1.0.x에, `setuptools`가 81 미만에 묶여 있음.
+> `pykrx`가 1.0.x에, `setuptools`가 81 미만에 묶여 있다.
 >
-> pykrx 1.0.x는 임포트할 때 `pkg_resources`를 부르는데 setuptools 81에서 그게 빠졌음.
-> 그래서 setuptools를 못 올림. `pykrx_source.py`의 경고 필터도 같은 이유로 있음.
+> pykrx 1.0.x는 임포트할 때 `pkg_resources`를 부르는데 setuptools 81에서 그게 빠졌다.
+> 그래서 setuptools를 올리지 못한다. `pykrx_source.py`의 경고 필터도 같은 이유로 있다.
 >
-> pkg_resources를 버린 1.2.3부터는 `pandas<3.0`을 요구함. 최신 1.2.8도 마찬가지.
-> 지금 pandas 3을 쓰고 있어서 pykrx를 올리면 pandas가 메이저로 내려감. 소스 하나
-> 때문에 그럴 일은 아니라고 보고 미뤄 둔 상태임.
+> pkg_resources를 버린 1.2.3부터는 `pandas<3.0`을 요구하고, 최신 1.2.8도 마찬가지다.
+> 지금 pandas 3을 쓰고 있어서 pykrx를 올리면 pandas가 메이저로 내려간다. 소스 하나
+> 때문에 그럴 일은 아니라고 보고 미뤄 둔 상태다.
 >
-> pykrx가 pandas 3을 받아 주면 그때 올리고, setuptools 핀과 경고 필터를 같이 지우면 됨.
+> pykrx가 pandas 3을 받아 주면 그때 올리고, setuptools 핀과 경고 필터를 같이 지우면 된다.
 
 ## 프로젝트 구조
 
-설정, 전략, DB, 리포트는 전부 `~/.stockscan/`에 저장.
+설정, 전략, DB, 리포트는 전부 `~/.stockscan/`에 저장된다.
 
 ```
 ~/.stockscan/
 ├── config.yml                 설정
-├── <전략>.py                  파일 하나에 전략 하나. 해시가 실행 기록에 박힘
+├── <전략>.py                  파일 하나에 전략 하나. 해시가 실행 기록에 박힌다
 ├── data/stockscan.db          ohlcv_cache · signals · 실행 이력
 └── reports/                   실행·백테스트 리포트 HTML
 ```
 
 ```
 app/
-├── config.py       설정. 사람이 적는 건 전부 여기, 나머지는 유도하거나 상수
+├── config.py       설정. 사람이 적는 건 전부 여기 있고, 나머지는 유도하거나 상수다
 ├── pipeline.py     유니버스 → 봉 → 전략 → 기록 → 로그
-├── evaluate.py     사후 수익률. 캐시만 읽음
+├── evaluate.py     사후 수익률. 캐시만 읽는다
 ├── scorecard.py    성적표
 ├── benchmark.py    KOSPI, S&P500
-├── service.py      명령의 본체. CLI도 스케줄러도 여기를 지남
+├── service.py      명령의 본체. CLI도 스케줄러도 여기를 지난다
 ├── serve.py        상주 루프. 발화·알림·하트비트·성적표
-├── schedule.py     다음 발화가 언제인지 계산만 함
-├── alerts.py       텔레그램. 나가는 방향뿐임
+├── schedule.py     다음 발화가 언제인지 계산만 한다
+├── alerts.py       텔레그램. 나가는 방향뿐이다
 ├── cli/            Typer 명령, 출력 규약, 종료 코드
 ├── engine/         Bundle·Item 계약, RunContext, 신호 배출구, 봉 상태
 ├── strategies/     Strategy 프로토콜, 로더(SHA-256), AST 인과성 검사
