@@ -106,7 +106,7 @@ class Schedule:
         if self.heartbeat:
             rows.append(f"{self.heartbeat.strftime('%H:%M')} [하트비트] 신호 0건이어도 보냅니다")
         if self.scorecard_day:
-            rows.append(f"매월 {self.scorecard_day}일 [성적표] 사후 수익률·승률·오버라이드")
+            rows.append(f"매월 {self.scorecard_day}일 [성적표] 사후 수익률·승률·기저율")
         # 조용히 건너뛰면 "주말에 왜 안 돌았지"가 된다. 여기 적어 두면 `describe`가 답한다.
         rows.append("주말(UTC 토·일)에는 건너뜁니다 — 토요일 새벽 미국장 슬롯은 그대로 돕니다")
         return rows

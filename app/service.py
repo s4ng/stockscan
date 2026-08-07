@@ -135,7 +135,7 @@ class RunOutcome:
     signal_ids: list[int] = field(default_factory=list)
     """기록된 `signals.id`. **dry-run에서는 비어 있다** — 행이 없으니 id도 없다.
 
-    알림의 `[샀다/안 샀다]` 버튼이 이 값을 실어 보낸다 (4.8 오버라이드 추적).
+    알림이 종목마다 `stockscan explain <id>`를 실어 보낸다 (12.5).
     """
 
 
