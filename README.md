@@ -23,8 +23,6 @@
    stockscan explain 42
 
 이 전략 최근 20건: 승률 55% · 20봉 중앙값 +1.8% (벤치마크 대비 -0.4%)
-
-          [ ✅ 샀다 ]   [ ⬜ 안 샀다 ]
 ```
 
 | 명령 | 설명 |
@@ -32,7 +30,7 @@
 | `serve` | 평소엔 이것만 띄워 둠. 스케줄·알림·성적표를 알아서 돌림 |
 | `run` | 오늘의 후보를 뽑음 |
 | `evaluate` | 신호의 사후 수익률을 채움 |
-| `scorecard` | 성적표. 승률, 기저율, 벤치마크 대비, 산 것과 무시한 것 비교 |
+| `scorecard` | 성적표. 신호를 전부 샀다고 치고 승률·기저율·벤치마크 대비 |
 | `backtest` | 한 종목을 하루씩 되감아 조건 충족일을 차트에 찍음 |
 
 - 설계문서: [ARCHITECTURE.md](./ARCHITECTURE.md)
@@ -71,6 +69,45 @@ telegram:
   chat_id: "<채팅 ID>"
 ```
 
+전략 파일 `~/.stockscan/<이름>.py`
+
+설정 파일 **옆**에 둠. 설정과 전략은 한 벌이라 통째로 복사·백업할 수 있어야 함.
+`sample/trend_breakout_55.py`가 다 채운 예시.
+
+```bash
+stockscan strategy new my_strategy    # ~/.stockscan/my_strategy.py 템플릿
+stockscan strategy check my_strategy  # 미래를 보는 코드가 없는지 AST로 확인
+```
+
+```python
+class MyStrategy(Strategy):
+    id = "my_strategy"        # 파일 이름과 같아야 함 (해시가 파일 단위라서)
+    startup_candles = 253     # 이만큼 못 채운 종목은 제외됨. 수집 깊이가 여기서 나옴
+
+    score_feature = "score"   # 이걸 선언하면 기본 rank가 순위·백분위를 채워 줌
+    score_descending = True
+
+    class Params(BaseModel):  # 파라미터는 여기가 정본. config.yml에 안 적음
+        window: int = Field(default=252, ge=2, le=1000, description="모멘텀 기간(봉)")
+        top_n: int = Field(default=10, ge=1, le=200, description="시장당 최대 후보")
+
+    def compute(self, item, p, ctx):      # 종목별 시계열 → features
+        close = item.ohlcv["close"]
+        return item.with_features(score=float(close.iloc[-1] / close.iloc[-1 - p.window] - 1))
+
+    def select(self, bundle, p, ctx):     # 최종 컷 (rank는 기본 구현으로 충분)
+        return top_n(bundle, p.top_n, ctx)
+```
+
+- **파일 하나에 전략 하나.** `compute`(종목별) → `rank`(횡단면) → `select`(컷) 순서.
+  단일 종목 전략이면 `compute`만 채우고 나머지는 기본 구현을 씀.
+- ⚠️ **`compute`는 과거만 봐야 함.** `rolling`·`ewm`·`shift(+n)`은 안전하고,
+  `shift(-n)`·`center=True`·`bfill`은 미래를 봄. 백테스트를 통째로 무너뜨리는
+  가장 흔한 경로라 `strategy check`가 잡지만, 통과가 보장은 아님.
+- 파라미터를 백테스트로 골라 넣지 않음. 검증된 팩터의 표준값을 쓰고 "왜 이 값인가"를
+  docstring에 적음. 자세한 건 [CLAUDE.md](./CLAUDE.md)의 "백테스트를 대하는 자세".
+- 컷은 `top_n` / `top_pct` 헬퍼로. 조용히 자르면 몇 개를 버렸는지 아무도 모름.
+
 ```bash
 stockscan run                  # 후보 뽑기. 기본은 dry-run이라 아무것도 안 남음
 stockscan run --commit         # signals 기록 + 봉 소비
@@ -85,6 +122,9 @@ stockscan serve                # 상주
 알아 둘 것 몇 가지.
 
 - 알림은 `serve`에서만 나감. 손으로 `run`을 돌린다고 텔레그램이 오지는 않음.
+- **주말에는 발화도 하트비트도 안 함.** 설정 항목이 아니라 기본값.
+  기준은 UTC라 **토요일 새벽의 미국장 슬롯(06:10)은 그대로 돎** — 그게 금요일 장이라서.
+- 성적표는 그 구간 신호를 **전부 샀다고 가정**한 값임. 무엇을 실제로 샀는지는 안 물어봄.
 - `explain`, `signals`, `stats`, `describe`는 읽기만 함. DB 파일도 안 만듦.
 - 종료 코드는 0(성공, 신호 0건 포함) / 2(소스 실패) / 3(검증 실패).
 - 모든 명령에 `--help`와 `--json`이 있음.
@@ -129,9 +169,9 @@ app/
 ├── scorecard.py    성적표
 ├── benchmark.py    KOSPI, S&P500
 ├── service.py      명령의 본체. CLI도 스케줄러도 여기를 지남
-├── serve.py        상주 루프. 발화·알림·하트비트·응답 수거·성적표
+├── serve.py        상주 루프. 발화·알림·하트비트·성적표
 ├── schedule.py     다음 발화가 언제인지 계산만 함
-├── alerts.py       텔레그램. 나가는 것과 [샀다/안 샀다] 응답
+├── alerts.py       텔레그램. 나가는 방향뿐임
 ├── cli/            Typer 명령, 출력 규약, 종료 코드
 ├── engine/         Bundle·Item 계약, RunContext, 신호 배출구, 봉 상태
 ├── strategies/     Strategy 프로토콜, 로더(SHA-256), AST 인과성 검사

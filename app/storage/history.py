@@ -44,8 +44,8 @@ class SqlSignalSink:
         self.ids: list[int] = []
         """기록된 행의 id. `drafts`와 같은 순서다.
 
-        알림의 `[샀다/안 샀다]` 버튼이 이 값을 콜백에 실어 보낸다 — id가 없으면
-        응답이 어느 신호에 대한 것인지 정할 수 없어 `acted`를 채울 수 없다 (4.8).
+        알림이 종목마다 `stockscan explain <id>`를 실어 보낸다 — id가 없으면
+        "왜 떴는지"를 되짚을 수단이 알림에서 사라진다 (12.5).
         """
 
     async def emit(self, draft: SignalDraft) -> bool:
@@ -165,24 +165,6 @@ async def finish_run(session: AsyncSession, result: RunResult) -> None:
     await session.commit()
 
 
-async def set_acted(session: AsyncSession, signal_id: int, acted: bool) -> SignalRow | None:
-    """이 신호대로 움직였는지 기록한다 (4.8 오버라이드 추적).
-
-    ★ 이 시스템의 정체성이 규율 기계라면, 측정할 것은 전략 성과만이 아니라
-    **사용자가 규율을 지켰는지**다. 무시한 신호의 사후 성과가 좋았다면 재량이
-    손해라는 뜻이고, 그 비교는 이 값이 채워져야만 가능하다.
-
-    되돌릴 수 있다 — 잘못 눌렀으면 반대로 다시 부르면 된다. 봉 소비와 달리
-    이 값은 무엇도 영영 잃게 만들지 않는다.
-    """
-    row = await session.get(SignalRow, signal_id)
-    if row is None:
-        return None
-    row.acted = acted
-    await session.commit()
-    return row
-
-
 async def snapshot_strategy(
     session: AsyncSession, *, strategy_id: str, sha256: str, source: str
 ) -> None:
@@ -203,15 +185,12 @@ async def list_signals(
     limit: int = 20,
     strategy_id: str | None = None,
     venue: str | None = None,
-    acted: bool | None = None,
 ) -> list[SignalRow]:
     stmt = select(SignalRow).order_by(SignalRow.as_of.desc(), SignalRow.id.desc()).limit(limit)
     if strategy_id:
         stmt = stmt.where(SignalRow.strategy_id == strategy_id)
     if venue:
         stmt = stmt.where(SignalRow.venue == venue)
-    if acted is not None:
-        stmt = stmt.where(SignalRow.acted.is_(acted))
     return list((await session.scalars(stmt)).all())
 
 
@@ -291,12 +270,3 @@ async def signal_counts(
     ]
 
 
-async def acted_breakdown(session: AsyncSession) -> dict[str, int]:
-    """오버라이드 추적의 원자료 (4.8). 실행/무시/미응답 건수."""
-    stmt = select(SignalRow.acted, func.count(SignalRow.id)).group_by(SignalRow.acted)
-    rows = (await session.execute(stmt)).all()
-    out = {"acted": 0, "ignored": 0, "unanswered": 0}
-    for acted, count in rows:
-        key = "unanswered" if acted is None else ("acted" if acted else "ignored")
-        out[key] = int(count)
-    return out

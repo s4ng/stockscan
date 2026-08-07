@@ -17,17 +17,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from itertools import zip_longest
 from typing import Any
 
 from app import config as app_config
 from app import service
-from app.alerts import AckResponse, AlertChannel, Delivery, ack_buttons
+from app.alerts import AlertChannel, Delivery
 from app.config import AppConfig
 from app.core.formatting import format_price_change
-from app.schedule import Schedule, ScheduleEntry, moments_around
-from app.storage import db, history
+from app.schedule import Schedule, ScheduleEntry, is_weekend, moments_around
+from app.storage import db
 
 #: 다음 발화까지 남았어도 이만큼마다 깨어난다.
 #:
@@ -60,9 +60,6 @@ class SchedulerState:
     started_at: datetime | None = None
     skipped_on_start: list[str] = field(default_factory=list)
     """시작 시각보다 앞서 있던 오늘의 슬롯. **몰아서 부르지 않고 건너뛴다.**"""
-
-    acks: list[AckResponse] = field(default_factory=list)
-    """버튼으로 받은 응답. 오버라이드 추적의 원자료다 (4.8)."""
 
     last_evaluation: Any | None = None
     """마지막 사후 수익률 평가 결과. 하트비트가 이걸 함께 보고한다."""
@@ -139,8 +136,16 @@ class Scheduler:
         return self._crossed(schedule.heartbeat, schedule.tz, now)
 
     def _crossed(self, at: Any, tz: Any, now: datetime) -> bool:
+        """직전 판단과 지금 사이에 이 시각을 지났는가. **주말 슬롯은 지나도 안 친다.**
+
+        ⚠️ 주말 판정을 `now`가 아니라 **슬롯 시각(`moment`)**으로 한다. 판단은 슬롯보다
+        최대 `POLL_SECONDS`만큼 늦게 오므로, 자정 직전 슬롯이면 `now`가 이미 다음 날이다.
+        """
         assert self._since is not None
-        return any(self._since < moment <= now for moment in moments_around(at, now, tz))
+        return any(
+            self._since < moment <= now and not is_weekend(moment)
+            for moment in moments_around(at, now, tz)
+        )
 
     # ------------------------------------------------------------------ 실행
     async def tick(self, now: datetime | None = None) -> None:
@@ -168,40 +173,7 @@ class Scheduler:
             if _scorecard_due(schedule, now):
                 await self._send_scorecard(now)
 
-        # ★ 발화와 무관하게 매 tick 걷는다. 사용자가 버튼을 누르는 시각은 슬롯과
-        #   아무 상관이 없고, 안 걷으면 텔레그램이 24시간 뒤 그 응답을 버린다.
-        await self.collect_acks()
-
         self._since = now
-
-    async def collect_acks(self) -> int:
-        """`[샀다/안 샀다]` 응답을 `signals.acted`에 쓴다 (4.8 오버라이드 추적).
-
-        ⚠️ **이것은 `--commit`의 부작용 셋(알림·signals 기록·봉 소비)에 들어가지 않는다.**
-        규칙 11이 막는 것은 되돌릴 수 없는 것인데, `acted`는 잘못 눌러도 반대로
-        다시 누르면 그만이라 아무것도 영영 잃게 만들지 않는다.
-        """
-        acks = await self.channel.poll_acks()
-        if not acks:
-            return 0
-
-        await db.init_db()
-        written = 0
-        for ack in acks:
-            async with db.session_scope() as session:
-                row = await history.set_acted(session, ack.signal_id, ack.acted)
-            verdict = "샀다" if ack.acted else "안 샀다"
-            if row is None:
-                # 신호가 없어졌다(DB 교체 등). 조용히 넘기면 사용자는 기록된 줄 안다.
-                await self.channel.confirm_ack(
-                    ack.callback_id, f"신호 {ack.signal_id}을(를) 찾지 못했습니다"
-                )
-                continue
-            await self.channel.confirm_ack(ack.callback_id, f"기록했습니다 — {verdict}")
-            self.state.acks.append(ack)
-            written += 1
-        del self.state.acks[:-50]
-        return written
 
     async def _fire(self, entry: ScheduleEntry, now: datetime) -> None:
         try:
@@ -242,10 +214,7 @@ class Scheduler:
             # ★ 알림이 자기 성적을 달고 나간다 — 받는 순간 "이걸 얼마나 믿어야
             #   하나"가 같이 와야 한다. 근거 없는 명령만 오면 알림을 보지 않게 된다.
             record = await self._recent_record(outcome)
-            await self._send(
-                _signal_message(entry, outcome, record),
-                buttons=ack_buttons(outcome.signal_ids),
-            )
+            await self._send(_signal_message(entry, outcome, record))
 
     async def _recent_record(self, outcome: service.RunOutcome) -> str:
         """이 전략의 최근 성적 한 줄. 표본이 적으면 **빈 문자열**(지어내지 않는다)."""
@@ -318,8 +287,8 @@ class Scheduler:
             )
         await self._send("\n".join(lines))
 
-    async def _send(self, text: str, buttons: list[dict[str, Any]] | None = None) -> None:
-        delivery = await self.channel.send(text, buttons)
+    async def _send(self, text: str) -> None:
+        delivery = await self.channel.send(text)
         self.state.deliveries.append(delivery)
         del self.state.deliveries[:-50]
 
@@ -341,9 +310,24 @@ def _scorecard_due(schedule: Schedule, now: datetime) -> bool:
 
     ⚠️ 하트비트와 함께 나가므로 **하루에 한 번만** 판정된다 — 하트비트가 이미
     "직전 판단과 지금 사이를 지났는가"로 걸러져 있어 중복 발송이 없다.
+
+    ★ **성적표 날이 주말이면 다음 발송일로 민다.** 주말에는 하트비트가 건너뛰므로
+    `day == 오늘`로 두면 **그 달치가 통째로 사라진다.** 성적표는 이 프로젝트의
+    제품이고(§4.8), 한 달에 한 번뿐이라 한 번 놓치면 그만큼이 그냥 없어진다.
     """
     day = schedule.scorecard_day
-    return bool(day) and now.astimezone(schedule.tz).day == day
+    if not day:
+        return False
+    local = now.astimezone(schedule.tz)
+    if local.day < day:
+        return False
+    # 성적표 날부터 어제까지가 **전부 건너뛴 날**일 때만 오늘이 그 자리다.
+    # (평일이 하루라도 끼어 있었다면 그날 이미 나갔다.)
+    at = schedule.heartbeat or time(0, 0)
+    return all(
+        is_weekend(datetime.combine(local.date().replace(day=d), at, tzinfo=schedule.tz))
+        for d in range(day, local.day)
+    )
 
 
 def _tz(state: SchedulerState) -> Any:

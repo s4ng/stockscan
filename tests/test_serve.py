@@ -20,7 +20,7 @@ from app import service
 from app.alerts import LogChannel
 from app.config import AppConfig, ScheduleConfig
 from app.schedule import Schedule, ScheduleEntry
-from app.serve import Scheduler
+from app.serve import Scheduler, _scorecard_due
 from tests.conftest import make_config
 
 KST = ZoneInfo("Asia/Seoul")
@@ -100,8 +100,8 @@ def test_schedule_survives_dst_by_rebuilding_each_day():
         entries=(ScheduleEntry(at=time(16, 10)),),
         timezone="America/New_York",
     )
-    before = datetime(2026, 3, 7, 12, 0, tzinfo=UTC)  # 전환 전 주말
-    after = datetime(2026, 3, 9, 12, 0, tzinfo=UTC)  # 전환 뒤
+    before = datetime(2026, 3, 6, 12, 0, tzinfo=UTC)  # 전환 전 금요일
+    after = datetime(2026, 3, 9, 12, 0, tzinfo=UTC)  # 전환 뒤 월요일
 
     first, _ = schedule.next_fire(before)
     second, _ = schedule.next_fire(after)
@@ -110,6 +110,20 @@ def test_schedule_survives_dst_by_rebuilding_each_day():
     assert first.astimezone(ZoneInfo("America/New_York")).hour == 16
     assert second.astimezone(ZoneInfo("America/New_York")).hour == 16
     assert first.hour != second.hour  # UTC로는 옮겨졌다
+
+
+def test_next_fire_jumps_over_the_weekend_to_monday():
+    """주말을 건너뛰므로 금요일 밤의 '다음 발화'는 **월요일**이다.
+
+    훑는 날 범위가 +1까지면 여기서 "다음 발화 없음"이 되고, 화면이 스케줄을
+    잃어버린 것처럼 보인다.
+    """
+    schedule = Schedule.from_config(CONFIG)
+    friday_evening = datetime(2026, 8, 7, 9, 0, tzinfo=UTC)  # 금 18:00 KST — 오늘 슬롯 끝
+
+    moment, _ = schedule.next_fire(friday_evening)
+
+    assert moment.astimezone(KST).date() == datetime(2026, 8, 10).date()  # 월요일
 
 
 def test_empty_schedule_yields_nothing_to_run():
@@ -231,6 +245,65 @@ async def test_heartbeat_is_sent_once_a_day():
     await scheduler.tick(datetime(2026, 8, 4, 1, 0, tzinfo=UTC))
 
     assert sum(1 for d in channel.sent if "살아 있습니다" in d.text) == 1
+
+
+# ------------------------------------------------------------------------ 주말
+@pytest.mark.asyncio
+async def test_weekend_slots_do_not_fire():
+    """장이 서지 않는 날에는 돌지 않는다 (설정이 아니라 기본값)."""
+    scheduler, _, calls = make_scheduler(written=3)
+    before = datetime(2026, 8, 8, 6, 30, tzinfo=UTC)  # 토 15:30 KST
+    after = datetime(2026, 8, 8, 6, 45, tzinfo=UTC)  # 토 15:40을 지났다
+
+    await scheduler.tick(before)
+    await scheduler.tick(after)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_heartbeat_on_the_weekend():
+    """★ 주말 하트비트를 흘려보게 되면 **평일 하트비트도 같이** 흘려보게 된다."""
+    scheduler, channel, _ = make_scheduler()
+    await scheduler.tick(datetime(2026, 8, 7, 23, 50, tzinfo=UTC))  # 토 08:50 KST
+    await scheduler.tick(datetime(2026, 8, 8, 0, 5, tzinfo=UTC))  # 토 09:05 KST
+
+    assert channel.sent == []
+
+
+@pytest.mark.asyncio
+async def test_saturday_dawn_slot_still_fires_because_it_is_fridays_us_session():
+    """★ 주말 판정이 **UTC 기준**인 이유.
+
+    한국에서 가장 흔한 슬롯인 "토요일 06:10"은 미국장 **금요일** 마감 직후다.
+    로컬 요일로 잘랐다면 금요일 미국 신호가 통째로 조용히 사라진다.
+    """
+    config = make_config(schedule=ScheduleConfig(at=[time(6, 10)], heartbeat=None))
+    scheduler, _, calls = make_scheduler(written=2, config=config)
+    # 토 06:10 KST = 금 21:10 UTC — UTC로는 아직 거래 주 안이다.
+    await scheduler.tick(datetime(2026, 8, 7, 21, 0, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 7, 21, 15, tzinfo=UTC))
+
+    assert len(calls) == 1
+
+
+def test_a_weekend_scorecard_day_slides_to_the_next_weekday():
+    """★ 성적표 날이 주말이면 그 달치가 사라진다 — 다음 발송일로 민다.
+
+    2026-08-01은 토요일이다. 하트비트가 건너뛰므로 그날은 못 나가고, 월요일(3일)에
+    나가야 한다. 그 뒤(4일)에 또 나가면 안 된다.
+    """
+    schedule = Schedule(
+        entries=(ScheduleEntry(at=time(15, 40)),),
+        timezone="Asia/Seoul",
+        heartbeat=time(9, 0),
+        scorecard_day=1,
+    )
+    at_kst = lambda day: datetime(2026, 8, day, 0, 5, tzinfo=UTC)  # noqa: E731 - 09:05 KST
+
+    assert _scorecard_due(schedule, at_kst(3)) is True  # 월요일 — 밀려서 여기
+    assert _scorecard_due(schedule, at_kst(4)) is False  # 이미 나갔다
+    assert _scorecard_due(schedule, at_kst(31)) is False
 
 
 # ------------------------------------------------------------------------ 상태

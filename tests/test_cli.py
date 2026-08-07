@@ -417,49 +417,7 @@ def test_empty_yaml_gives_an_actionable_error(tmp_path: Path):
     assert result.exit_code == 3
 
 
-# ------------------------------------------------------------------- acted 응답
-def test_signals_ack_records_the_override(workspace: Path):
-    """★ 규율 기계라면 측정할 것은 전략 성과만이 아니라 사용자가 규율을 지켰는지다."""
-    invoke("run", "--now", NOW, "--commit")
-    signal_id = payload(invoke("signals", "list", "--json"))["signals"][0]["id"]
-
-    acked = payload(invoke("signals", "ack", str(signal_id), "--acted", "--json"))
-    assert acked["acted"] is True
-
-    body = payload(invoke("stats", "--compare", "acted", "--json"))
-    assert body["acted"]["acted"] == 1
-
-
-def test_signals_ack_is_reversible(workspace: Path):
-    """잘못 눌렀으면 반대로 다시 부르면 된다 — 되돌릴 수 없는 것은 봉 소비뿐이다."""
-    invoke("run", "--now", NOW, "--commit")
-    signal_id = payload(invoke("signals", "list", "--json"))["signals"][0]["id"]
-
-    invoke("signals", "ack", str(signal_id), "--acted")
-    reverted = payload(invoke("signals", "ack", str(signal_id), "--ignored", "--json"))
-
-    assert reverted["acted"] is False
-
-
-def test_signals_ack_can_be_filtered(workspace: Path):
-    invoke("run", "--now", NOW, "--commit")
-    signals = payload(invoke("signals", "list", "--json"))["signals"]
-    invoke("signals", "ack", str(signals[0]["id"]), "--ignored")
-
-    ignored = payload(invoke("signals", "list", "--ignored", "--json"))
-    assert [s["id"] for s in ignored["signals"]] == [signals[0]["id"]]
-
-
-def test_signals_ack_unknown_id_exits_three(workspace: Path):
-    invoke("run", "--now", NOW, "--commit")
-    assert invoke("signals", "ack", "424242").exit_code == 3
-
-
-def test_signals_ack_without_a_database_exits_three(workspace: Path):
-    assert invoke("signals", "ack", "1").exit_code == 3
-    assert not (workspace / "test.db").exists()
-
-
+# -------------------------------------------------------------------------- 수집
 def test_ingest_without_commit_writes_nothing(workspace: Path):
     """계획만 보여 준다. 소스도 캐시도 건드리지 않는다 (규칙 11)."""
     body = payload(invoke("ingest", "--now", NOW, "--json"))

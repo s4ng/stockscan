@@ -448,7 +448,6 @@ def _render_scorecard(payload: dict[str, Any]) -> str:
         signals=payload["signals"],
         evaluated=payload["evaluated"],
         horizons=[sc.Horizon(**h) for h in payload["horizons"]],
-        override=sc.Override(**payload["override"]),
         notes=payload["notes"],
     )
     return sc.render(card)
@@ -820,15 +819,12 @@ async def _last_run() -> dict[str, Any] | None:
 def signals_list(
     strategy: Annotated[str | None, typer.Option("--strategy", help="전략 id로 필터")] = None,
     venue: Annotated[str | None, typer.Option("--venue", help="venue로 필터")] = None,
-    acted: Annotated[
-        bool | None, typer.Option("--acted/--ignored", help="실행/무시한 신호만")
-    ] = None,
     limit: LimitOpt = 20,
     as_json: JsonOpt = False,
 ) -> None:
     """기록된 신호를 최신순으로 봅니다. 부작용 없음."""
     out = Out(as_json)
-    rows = asyncio.run(_query_signals(out, strategy, venue, acted, limit))
+    rows = asyncio.run(_query_signals(out, strategy, venue, limit))
     payload = {"ok": True, "count": len(rows), "signals": rows}
     tz = _display_tz()
     human = table(
@@ -839,72 +835,22 @@ def signals_list(
                 r.get("display_name") or "",
                 format_time(r["as_of"], tz),
                 r["strategy_id"],
-                r["acted"],
             ]
             for r in rows
         ],
-        ["id", "종목", "이름", f"봉 마감 ({timezone_label(tz)})", "전략", "실행"],
+        ["id", "종목", "이름", f"봉 마감 ({timezone_label(tz)})", "전략"],
     ) or ["신호가 없습니다. `stockscan run --commit`으로 기록됩니다."]
     out.emit(payload, human)
 
 
-@signals_app.command("ack")
-def signals_ack(
-    signal_id: Annotated[int, typer.Argument(help="`signals list`가 보여 주는 id")],
-    acted: Annotated[
-        bool,
-        typer.Option("--acted/--ignored", help="이 신호대로 움직였는가"),
-    ] = True,
-    as_json: JsonOpt = False,
-) -> None:
-    """신호에 응답합니다 — 실행했는가, 무시했는가 (4.8 오버라이드 추적).
-
-    **`run`과 달리 `--commit`이 필요 없습니다.** 이 명령의 존재 목적 자체가 기록이고,
-    되돌릴 수 있기 때문입니다 (반대로 다시 부르면 됩니다). 되돌릴 수 없는 부작용은
-    봉 소비뿐이고 그건 여전히 `--commit`만이 엽니다 (규칙 11).
-
-    무시한 신호의 사후 성과는 Forward Return Evaluator(Phase 3) 이후에 나옵니다.
-    """
-    out = Out(as_json)
-    if not _database_exists():
-        out.fail(
-            ExitCode.VALIDATION,
-            "기록된 신호가 없습니다. `stockscan run --commit`으로 먼저 신호를 남기세요.",
-        )
-    record = asyncio.run(_ack(signal_id, acted))
-    if record is None:
-        out.fail(
-            ExitCode.VALIDATION,
-            f"신호 {signal_id}번을 찾을 수 없습니다. `stockscan signals list`로 id를 확인하세요.",
-        )
-        return
-
-    out.emit(
-        {"ok": True, **record},
-        [
-            f"{record['instrument']} · {record['as_of']} → "
-            f"{'실행함' if acted else '무시함'}으로 기록했습니다.",
-            "※ 잘못 눌렀으면 반대 플래그로 다시 부르면 됩니다.",
-        ],
-    )
-
-
-async def _ack(signal_id: int, acted: bool) -> dict[str, Any] | None:
-    async with db.session_scope() as session:
-        row = await history.set_acted(session, signal_id, acted)
-        record = _signal_dict(row) if row is not None else None
-    await db.dispose()
-    return record
-
-
 async def _query_signals(
-    out: Out, strategy: str | None, venue: str | None, acted: bool | None, limit: int
+    out: Out, strategy: str | None, venue: str | None, limit: int
 ) -> list[dict[str, Any]]:
     if not _database_exists():
         return []
     async with db.session_scope() as session:
         rows = await history.list_signals(
-            session, limit=limit, strategy_id=strategy, venue=venue, acted=acted
+            session, limit=limit, strategy_id=strategy, venue=venue
         )
         out_rows = [_signal_dict(r) for r in rows]
     await db.dispose()
@@ -949,7 +895,6 @@ def explain(
         f"데이터 {_data_origin(payload['data'])} · adjusted={payload['data']['adjusted']}"
         f" · fallback_from={payload['data']['fallback_from']}",
         f"실행  {payload['run']['run_id']} · {payload['run']['status']}",
-        f"판정  acted={payload['acted']}",
     ]
     out.emit(payload, human)
 
@@ -1019,7 +964,6 @@ async def _explain(out: Out, signal_id: int) -> dict[str, Any] | None:
         "timeframe": row.timeframe,
         "as_of": row.as_of.isoformat(),
         "kind": row.kind,
-        "acted": row.acted,
         "strategy": {
             "id": row.strategy_id,
             "sha256": row.strategy_sha256,
@@ -1054,9 +998,6 @@ def stats(
     group_by: Annotated[
         str, typer.Option("--group-by", help="strategy | venue | instrument | timeframe")
     ] = "strategy",
-    compare: Annotated[
-        str | None, typer.Option("--compare", help="acted — 오버라이드 분석 (4.8)")
-    ] = None,
     as_json: JsonOpt = False,
 ) -> None:
     """신호 이력 집계. 부작용 없음.
@@ -1064,7 +1005,7 @@ def stats(
     사후 성적은 `stockscan scorecard`가 냅니다 — 이쪽은 건수와 분산입니다.
     """
     out = Out(as_json)
-    payload = asyncio.run(_stats(out, group_by, compare))
+    payload = asyncio.run(_stats(out, group_by))
     human = [
         *(
             table(
@@ -1074,17 +1015,10 @@ def stats(
             or ["신호가 없습니다."]
         ),
     ]
-    if payload.get("acted"):
-        a = payload["acted"]
-        human += [
-            "",
-            f"오버라이드 — 실행 {a['acted']} / 무시 {a['ignored']} / 미응답 {a['unanswered']}",
-            "※ 무시한 신호의 사후 성과는 `stockscan scorecard`가 냅니다.",
-        ]
     out.emit(payload, human)
 
 
-async def _stats(out: Out, group_by: str, compare: str | None) -> dict[str, Any]:
+async def _stats(out: Out, group_by: str) -> dict[str, Any]:
     if not _database_exists():
         return {"ok": True, "group_by": group_by, "groups": [], "quality_metrics": None}
     async with db.session_scope() as session:
@@ -1094,13 +1028,11 @@ async def _stats(out: Out, group_by: str, compare: str | None) -> dict[str, Any]
             await db.dispose()
             out.fail(ExitCode.VALIDATION, str(exc))
             raise
-        acted = await history.acted_breakdown(session) if compare == "acted" else None
     await db.dispose()
     return {
         "ok": True,
         "group_by": group_by,
         "groups": groups,
-        "acted": acted,
         # 신호 품질 지표를 아직 계산할 수 없다는 사실 자체를 스키마에 남긴다.
         "quality_metrics": None,
         "quality_metrics_note": "forward return · hit rate · IC는 Phase 3에서 추가됩니다.",
@@ -1256,7 +1188,6 @@ def _signal_dict(row: Any) -> dict[str, Any]:
         "strategy_sha256": row.strategy_sha256,
         "features": row.features or {},
         "tags": row.tags or {},
-        "acted": row.acted,
     }
 
 
