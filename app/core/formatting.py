@@ -54,6 +54,27 @@ def format_price_change(value: float | int | None, ratio: float | None) -> str:
     return f"{price} ({change})" if change else price
 
 
+# --------------------------------------------------------------------------- 시장
+#: 시장별 국기. **키가 venue가 아니라 market이다** — `nasdaq`과 `nyse`를 나눌 이유가
+#: 없는 것은 랭킹 풀과 같은 논리다 (규칙 17). venue로 키를 잡으면 거래소가 늘 때마다
+#: 같은 국기를 한 줄씩 더 적게 되고, 언젠가 한쪽만 빠진다.
+MARKET_FLAGS = {"krx": "🇰🇷", "us": "🇺🇸"}
+
+
+def market_flag(venue: str | None) -> str:
+    """venue가 속한 시장의 국기. 모르는 venue면 **빈 문자열**.
+
+    ⚠️ **대체 기호(`🏳️`·`?`)를 넣지 않는다.** 국기는 목록을 한 눈에 시장별로 가르는
+    장치인데, 정체 모를 기호가 섞이면 그 기능이 사라진다 — 없는 편이 낫다.
+    벤치마크 지수(`market == "benchmark"`)가 여기 걸리는데, 알림에 실릴 일이
+    없으므로 국기를 주지 않는 것이 맞다.
+    """
+    from app.market.instrument import VENUES
+
+    spec = VENUES.get(venue or "")
+    return MARKET_FLAGS.get(spec.market, "") if spec else ""
+
+
 # --------------------------------------------------------------------------- 시각
 DEFAULT_TIMEZONE = "Asia/Seoul"
 

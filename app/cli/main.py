@@ -371,7 +371,13 @@ def alert_test(as_json: JsonOpt = False) -> None:
 
     ⚠️ 이 명령은 예외적으로 바깥으로 나갑니다(§12.2의 "알림은 `serve`만"). 사람이
     **채널을 시험하려고 명시적으로** 부른 것이고, 신호가 아니라 테스트 문구를 보냅니다.
+
+    ★ **토큰만이 아니라 서식까지 확인합니다.** 한 줄짜리 평문을 보내면 "왔다"만
+    알 수 있는데, 정작 보고 싶은 것은 굵은 글씨·국기가 실제로 렌더되는가입니다 —
+    그걸 진짜 신호가 날 때까지 못 보면 이 명령이 있는 이유가 반쯤 사라집니다.
     """
+    from app.serve import sample_message
+
     out = Out(as_json)
     channel = default_channel(_channel_config(out))
     if channel.id == "log":
@@ -382,12 +388,15 @@ def alert_test(as_json: JsonOpt = False) -> None:
             f"설정하세요 ({get_settings().resolve('.env')} 또는 환경변수).",
         )
     stamp = format_time(datetime.now(UTC))
-    delivery = asyncio.run(channel.send(f"🔔 stockscan 테스트 알림 ({stamp})"))
+    delivery = asyncio.run(channel.send(sample_message(stamp)))
     if not delivery.ok:
         out.fail(ExitCode.DATA, f"보내지 못했습니다 — {delivery.error}")
     out.emit(
         {"ok": True, "channel": channel.id, "sent_at": delivery.at.isoformat()},
-        [f"{channel.id} 채널로 보냈습니다. 받은 메시지를 확인하세요."],
+        [
+            f"{channel.id} 채널로 보냈습니다. 받은 메시지를 확인하세요.",
+            "종목명이 굵게, 앞에 국기가 보이면 서식이 제대로 붙은 것입니다.",
+        ],
     )
 
 

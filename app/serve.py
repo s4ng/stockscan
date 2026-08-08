@@ -23,9 +23,9 @@ from typing import Any
 
 from app import config as app_config
 from app import service
-from app.alerts import AlertChannel, Delivery
+from app.alerts import AlertChannel, Delivery, bold, code, esc
 from app.config import AppConfig
-from app.core.formatting import format_price_change
+from app.core.formatting import format_price_change, market_flag
 from app.schedule import Schedule, ScheduleEntry, is_weekend, moments_around
 from app.storage import db
 
@@ -195,7 +195,8 @@ class Scheduler:
                 )
             except Exception as exc:  # noqa: BLE001 - 하루치 실패로 프로세스를 죽이지 않는다
                 self.state.record(Fire(now, entry.label(), ok=False, detail=str(exc)))
-                await self._send(f"⚠️ 실행 실패 [{entry.label()}] — {exc}")
+                # 예외 문구는 어디서 왔는지 모른다 — 반드시 이스케이프한다.
+                await self._send(f"⚠️ 실행 실패 [{esc(entry.label())}] — {esc(exc)}")
                 return
             service.write_report(outcome, config, warnings.append)
             # ★ 봉을 새로 받은 직후가 사후 수익률을 채우기 가장 좋은 시점이다 —
@@ -273,9 +274,9 @@ class Scheduler:
         tail = f"{last.label} {last.detail}" if last else "(아직 없음)"
 
         lines = [
-            f"✅ stockscan 살아 있습니다 ({stamp})",
+            f"✅ {bold('stockscan 살아 있습니다')} ({stamp})",
             f"오늘 실행 {len(today)}회 · 신호 {signals}건",
-            f"마지막: {tail}",
+            f"마지막: {esc(tail)}",
         ]
         # ⚠️ **봉이 끊겨 채우지 못한 종목은 하트비트에 싣는다.** 조용히 두면
         #    성적표의 분모가 손실 쪽만 빠진 채로 굳는다 (규칙 18 / 4.8).
@@ -283,7 +284,7 @@ class Scheduler:
         if missing:
             lines.append(
                 f"⚠️ 봉이 끊겨 사후 수익률을 못 채운 종목 {len(missing)}개 — "
-                f"`stockscan ingest --commit`"
+                f"{code('stockscan ingest --commit')}"
             )
         await self._send("\n".join(lines))
 
@@ -337,31 +338,115 @@ def _tz(state: SchedulerState) -> Any:
 def _signal_message(
     entry: ScheduleEntry, outcome: service.RunOutcome, record: str = ""
 ) -> str:
-    """알림 본문.
+    """알림 본문 (텔레그램 HTML 서식).
 
     ★ **종목명과 순위만으로는 행동으로 이어지지 않는다.** 모르는 종목의 등수를 받으면
     할 수 있는 다음 행동이 없다. 그래서 값(종가·등락)과 근거(전략이 남긴 feature)를
     함께 싣고, 되짚을 수 있게 `explain` 명령을 그대로 적어 준다.
+
+    ★ **서식은 훑기 위한 것이다.** 하루 3~6건이 한 통으로 오는데 전부 평문이면
+    종목명이 코드·가격·근거와 같은 무게로 붙어 있어 한 눈에 걸리지 않는다. 그래서
+    **종목명만 굵게, 시장은 국기로** 가른다 — 강조가 늘면 강조가 사라지므로
+    여기에 굵은 글씨를 더 넣지 않는다.
+
+    ⚠️ **바깥에서 온 문자열은 전부 `esc`를 지난다.** 종목명(`AT&T`)과 feature
+    이름(전략 파일이 정한다)이 그렇다. 하나라도 새면 텔레그램이 메시지를 통째로
+    거부한다 — `alerts.py`가 평문으로 되돌려 보내지만, 그때는 이미 서식이 없다.
     """
     strategy = (outcome.signals[0].get("strategy_id") if outcome.signals else None) or "-"
-    lines = [f"📈 {strategy} — 신호 {outcome.written}건 [{entry.label()}]", ""]
+    # 머리글은 굵게 하지 않는다. 굵은 글씨가 이 메시지에서 뜻하는 것은 **종목명**
+    # 하나여야 목록을 훑을 때 눈이 거기로 간다 — 머리글은 📈와 빈 줄이 이미 가른다.
+    lines = [f"📈 {esc(strategy)} — 신호 {outcome.written}건 [{esc(entry.label())}]", ""]
 
     for signal, signal_id in zip_longest(outcome.signals[:10], outcome.signal_ids[:10]):
         if signal is None:
             break
-        name = signal.get("display_name") or signal["instrument"]
-        price = format_price_change(signal.get("close"), signal.get("change_pct"))
-        head = f"· {name} ({signal['instrument']})"
-        lines.append(f"{head}  {price}" if price.strip() else head)
-
-        reason = _reason(signal.get("features") or {})
-        if reason:
-            lines.append(f"   {reason}")
-        if signal_id is not None:
-            lines.append(f"   stockscan explain {signal_id}")
+        lines += _signal_lines(signal, signal_id)
 
     if outcome.written > 10:
         lines.append(f"… 외 {outcome.written - 10}건")
+
+    # ★★ **알림이 자기 성적을 달고 나간다** — 스크리너가 자신감 기계가 되는 것을
+    #    막는 장치 넷 중 하나다. 표본이 5건보다 적으면 `render_inline`이 빈 문자열을
+    #    주므로 여기서 저절로 빠진다 (없는 숫자를 지어내지 않는다).
+    if record:
+        lines += ["", esc(record)]
+    return "\n".join(lines)
+
+
+def _signal_lines(signal: dict[str, Any], signal_id: int | None) -> list[str]:
+    """신호 한 건이 차지하는 줄.
+
+    ★ **`alert-test`의 예시도 이 함수를 지난다** (`sample_message`). 예시를 따로
+    적어 두면 서식을 고쳤을 때 테스트 알림만 옛 모양으로 남고, 사람은 **실제로 받게
+    될 것과 다른 것**을 보고 "확인했다"고 판단하게 된다.
+    """
+    # 국기는 **줄 맨 앞**이다. 목록을 세로로 훑을 때 시장이 먼저 갈려야 한다.
+    # 모르는 venue면 국기가 없으므로(빈 문자열) 원래의 가운뎃점으로 돌아간다.
+    flag = market_flag(signal.get("venue")) or "·"
+    name = signal.get("display_name") or signal["instrument"]
+    price = format_price_change(signal.get("close"), signal.get("change_pct"))
+    head = f"{flag} {bold(name)} ({esc(signal['instrument'])})"
+
+    lines = [f"{head}  {esc(price)}" if price.strip() else head]
+    reason = _reason(signal.get("features") or {})
+    if reason:
+        lines.append(f"   {esc(reason)}")
+    if signal_id is not None:
+        # 탭하면 복사된다 — 되짚는 데 드는 손이 한 번 줄어든다.
+        lines.append(f"   {code(f'stockscan explain {signal_id}')}")
+    return lines
+
+
+#: `alert-test`가 보여 주는 예시 신호.
+#:
+#: ⚠️ **실제 종목을 쓰지 않는다.** 테스트 알림이 진짜 후보처럼 보이면 그걸 보고
+#: 주문하는 일이 실제로 생긴다. 존재하지 않는 코드(`000000`·`EXMPL`)를 쓰고,
+#: 본문에도 실제 신호가 아니라고 적는다 — 12.3의 "미구현을 성공처럼 보이게 하지
+#: 않는다"와 같은 규범이다.
+_SAMPLE_SIGNALS: list[dict[str, Any]] = [
+    {
+        "instrument": "krx:000000",
+        "display_name": "예시종목",
+        "venue": "krx",
+        "close": 70000,
+        "change_pct": 0.0123,
+        "features": {"rank": 1, "rank_pool": "krx", "universe_size": 200, "예시점수": 1.234},
+    },
+    {
+        "instrument": "nasdaq:EXMPL",
+        "display_name": "Example Corp",
+        "venue": "nasdaq",
+        "close": 123.45,
+        "change_pct": -0.005,
+        "features": {"rank": 3, "rank_pool": "us", "universe_size": 100, "예시점수": 0.987},
+    },
+]
+
+
+def sample_message(stamp: str) -> str:
+    """`alert-test`의 본문 — 토큰만이 아니라 **서식까지** 확인한다.
+
+    한 줄짜리 평문을 보내면 "메시지가 왔다"만 알 수 있다. 정작 확인하고 싶은 것은
+    굵은 글씨·국기·`<code>` 상자가 실제로 렌더되는가인데, 그건 스케줄 시각에 진짜
+    신호가 나올 때까지 알 수 없었다 — 그러면 이 명령이 있는 이유가 반쯤 없어진다.
+
+    ⚠️ 예시 신호에는 `explain` 줄을 붙이지 않는다. 붙이면 **남의 신호 id**를 가리켜,
+    눌러 본 사람이 관계없는 신호를 자기 것으로 읽는다.
+    """
+    lines = [
+        f"🔔 {bold('stockscan 테스트 알림')} ({esc(stamp)})",
+        "",
+        "아래는 서식 확인용 예시입니다 — 실제 신호가 아닙니다.",
+        "",
+    ]
+    for signal in _SAMPLE_SIGNALS:
+        lines += _signal_lines(signal, None)
+    lines += [
+        "",
+        f"명령은 이렇게 보입니다 — {code('stockscan signals list')}",
+        "종목명이 굵게, 앞에 국기가, 명령이 상자로 보이면 서식이 붙은 것입니다.",
+    ]
     return "\n".join(lines)
 
 

@@ -20,7 +20,7 @@ from app import service
 from app.alerts import LogChannel
 from app.config import AppConfig, ScheduleConfig
 from app.schedule import Schedule, ScheduleEntry
-from app.serve import Scheduler, _scorecard_due
+from app.serve import Scheduler, _scorecard_due, sample_message
 from tests.conftest import make_config
 
 KST = ZoneInfo("Asia/Seoul")
@@ -32,32 +32,43 @@ CONFIG = make_config(
 )
 
 
+def signal(instrument: str = "krx:005930", name: str = "삼성전자", venue: str = "krx"):
+    return {
+        "instrument": instrument,
+        "display_name": name,
+        "venue": venue,
+        "close": 80000,
+        "change_pct": 0.0234,
+        "strategy_id": "trend_breakout_55",
+        "features": {"rank": 1, "rank_pool": "krx", "trend_strength": 3.409},
+    }
+
+
 class FakeOutcome:
-    def __init__(self, written: int) -> None:
+    def __init__(self, written: int, signals: list[dict[str, Any]] | None = None) -> None:
         self.written = written
-        self.signals: list[dict[str, Any]] = [
-            {
-                "instrument": "krx:005930",
-                "display_name": "삼성전자",
-                "close": 80000,
-                "change_pct": 0.0234,
-                "strategy_id": "trend_breakout_55",
-                "features": {"rank": 1, "rank_pool": "krx", "trend_strength": 3.409},
-            }
-        ] * written
-        self.signal_ids = list(range(1, written + 1))
+        self.signals: list[dict[str, Any]] = (
+            signals if signals is not None else [signal()] * written
+        )
+        self.signal_ids = list(range(1, len(self.signals) + 1))
         self.result = None
         self.committed = True
 
 
-def make_scheduler(*, written: int = 0, fail: bool = False, config: AppConfig = CONFIG):
+def make_scheduler(
+    *,
+    written: int = 0,
+    fail: bool = False,
+    config: AppConfig = CONFIG,
+    signals: list[dict[str, Any]] | None = None,
+):
     calls: list[dict[str, Any]] = []
 
     async def fake_run(loaded_config, **kwargs):
         calls.append(kwargs)
         if fail:
             raise RuntimeError("소스가 죽었습니다")
-        return FakeOutcome(written)
+        return FakeOutcome(written, signals)
 
     channel = LogChannel()
     scheduler = Scheduler(channel, load_config=lambda: config, run=fake_run)
@@ -211,6 +222,140 @@ async def test_the_alert_carries_price_and_reason_not_just_a_rank():
     assert "trend_strength" in text  # 근거
     assert "krx 1위" in text
     assert "stockscan explain 1" in text  # 되짚을 수단
+
+
+# ------------------------------------------------------------------- 알림 서식
+@pytest.mark.asyncio
+async def test_the_stock_name_is_the_only_thing_in_bold():
+    """★ **강조가 늘면 강조가 사라진다.**
+
+    한 통에 3~6건이 오는데 전부 평문이면 종목명이 코드·가격·근거와 같은 무게로
+    붙어 있어 한 눈에 걸리지 않는다. 그래서 **굵은 글씨가 이 메시지에서 뜻하는 것은
+    종목명 하나뿐이어야 한다** — 머리글이나 근거 줄까지 굵어지면 도로 평평해진다.
+    """
+    scheduler, channel, _ = make_scheduler(
+        written=2,
+        signals=[signal("krx:005930", "삼성전자", "krx"), signal("krx:000660", "SK하이닉스")],
+    )
+
+    await scheduler.tick(datetime(2026, 8, 4, 6, 30, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
+
+    text = channel.sent[0].text
+    assert "<b>삼성전자</b>" in text
+    assert text.count("<b>") == 2  # 신호 2건 = 굵은 글씨 2개. 머리글·근거는 평문이다
+    assert "<code>stockscan explain 1</code>" in text  # 탭하면 복사된다
+
+
+@pytest.mark.asyncio
+async def test_each_market_gets_its_flag_at_the_head_of_the_line():
+    """★ 국기는 **줄 맨 앞**이다. 목록을 세로로 훑을 때 시장이 먼저 갈려야 한다.
+
+    ⚠️ 국기는 venue가 아니라 **시장**에서 나온다 — `nasdaq`과 `nyse`를 나눌 이유가
+    없는 것은 랭킹 풀과 같은 논리다 (규칙 17).
+    """
+    scheduler, channel, _ = make_scheduler(
+        written=3,
+        signals=[
+            signal("krx:005930", "삼성전자", "krx"),
+            signal("nasdaq:AAPL", "Apple", "nasdaq"),
+            signal("nyse:KO", "Coca-Cola", "nyse"),
+        ],
+    )
+
+    await scheduler.tick(datetime(2026, 8, 4, 6, 30, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
+
+    text = channel.sent[0].text
+    assert "🇰🇷 <b>삼성전자</b>" in text
+    assert "🇺🇸 <b>Apple</b>" in text
+    assert "🇺🇸 <b>Coca-Cola</b>" in text
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_venue_falls_back_to_the_bullet():
+    """⚠️ 모르는 venue에 대체 기호를 넣지 않는다.
+
+    국기는 시장을 한 눈에 가르는 장치인데 정체 모를 기호가 섞이면 그 기능이
+    사라진다. 원래의 가운뎃점으로 돌아가는 편이 낫다.
+    """
+    scheduler, channel, _ = make_scheduler(
+        written=1, signals=[signal("mars:XYZ", "화성전자", "mars")]
+    )
+
+    await scheduler.tick(datetime(2026, 8, 4, 6, 30, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
+
+    assert "· <b>화성전자</b>" in channel.sent[0].text
+
+
+@pytest.mark.asyncio
+async def test_a_stock_name_with_an_ampersand_is_escaped():
+    """소스가 주는 종목명에는 `&`가 들어온다. 새면 메시지 전체가 거부된다."""
+    scheduler, channel, _ = make_scheduler(
+        written=1, signals=[signal("nyse:T", "AT&T", "nyse")]
+    )
+
+    await scheduler.tick(datetime(2026, 8, 4, 6, 30, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
+
+    assert "<b>AT&amp;T</b>" in channel.sent[0].text
+
+
+def test_the_test_alert_shows_the_real_formatting():
+    """★ `alert-test`는 토큰만이 아니라 **서식**을 확인하는 명령이다.
+
+    한 줄짜리 평문을 보내면 "왔다"만 알 수 있고, 굵은 글씨·국기가 실제로 렌더되는지는
+    진짜 신호가 날 때까지 모른다 — 그러면 이 명령이 있는 이유가 반쯤 사라진다.
+    """
+    text = sample_message("2026-08-08 21:30")
+
+    assert "🇰🇷 <b>" in text and "🇺🇸 <b>" in text
+    assert "<code>" in text
+
+
+def test_the_test_alert_cannot_be_mistaken_for_a_real_signal():
+    """⚠️ 테스트 알림이 진짜 후보처럼 보이면 그걸 보고 주문하는 일이 생긴다.
+
+    존재하지 않는 코드를 쓰고, 본문에 아니라고 적고, `explain` 줄은 붙이지 않는다 —
+    붙이면 **남의 신호 id**를 가리켜 눌러 본 사람이 관계없는 신호를 자기 것으로 읽는다.
+    """
+    text = sample_message("2026-08-08 21:30")
+
+    assert "실제 신호가 아닙니다" in text
+    assert "stockscan explain" not in text
+
+
+def test_the_test_alert_uses_the_same_renderer_as_a_real_one():
+    """★ 예시를 따로 적어 두면 서식을 고쳤을 때 테스트 알림만 옛 모양으로 남는다.
+
+    그러면 사람은 **실제로 받게 될 것과 다른 것**을 보고 "확인했다"고 판단한다.
+    두 메시지가 같은 함수를 지나는지 직접 겨눈다.
+    """
+    from app.serve import _SAMPLE_SIGNALS, _signal_lines
+
+    assert _signal_lines(_SAMPLE_SIGNALS[0], None)[0] in sample_message("x")
+
+
+@pytest.mark.asyncio
+async def test_the_alert_carries_its_own_track_record(monkeypatch):
+    """★★ 알림이 자기 성적을 달고 나간다 — 자신감 기계를 막는 장치 넷 중 하나다.
+
+    ⚠️ **2026-08-08까지 이 줄은 계산해서 넘긴 뒤 그대로 버려졌다** (`_signal_message`가
+    `record` 인자를 받기만 하고 쓰지 않았다). 메시지는 그럴듯했고 아무도 몰랐다 —
+    빠져도 티가 안 나는 장치라서, 여기서 직접 겨눈다.
+    """
+
+    async def fake_record(self, outcome):
+        return "이 전략 최근 20건: 승률 55% · 20봉 중앙값 +1.8%"
+
+    monkeypatch.setattr(Scheduler, "_recent_record", fake_record)
+    scheduler, channel, _ = make_scheduler(written=1)
+
+    await scheduler.tick(datetime(2026, 8, 4, 6, 30, tzinfo=UTC))
+    await scheduler.tick(datetime(2026, 8, 4, 6, 45, tzinfo=UTC))
+
+    assert "이 전략 최근 20건: 승률 55%" in channel.sent[0].text
 
 
 @pytest.mark.asyncio

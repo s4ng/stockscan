@@ -19,7 +19,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.alerts import default_channel
+from app.alerts import TelegramChannel, bold, code, default_channel, esc, strip_tags
 from app.engine.signals import SignalDraft
 from app.storage import history
 from app.storage.models import Base
@@ -73,6 +73,71 @@ def test_placeholder_tokens_are_not_treated_as_real(monkeypatch):
         }
     )
     assert default_channel(config).id == "log"
+
+
+# ------------------------------------------------------------------ 서식
+def test_text_from_outside_cannot_break_the_markup():
+    """★ 서식을 켜면 **바깥에서 온 문자열이 메시지를 통째로 깰 수 있다.**
+
+    종목명은 소스가 주는 값이라 `&`가 들어온다(`AT&T`·`S&P Global`). 이스케이프가
+    빠지면 텔레그램이 메시지 전체를 거부하고, 그날 알림이 통째로 사라진다.
+    """
+    assert esc("AT&T") == "AT&amp;T"
+    assert bold("<script>") == "<b>&lt;script&gt;</b>"
+    assert code("a > b") == "<code>a &gt; b</code>"
+
+
+def test_stripping_tags_gives_back_the_original_text():
+    """평문 되돌림은 **읽을 수 있어야** 한다 — `&amp;`가 남으면 되돌린 의미가 없다."""
+    assert strip_tags("🇰🇷 <b>AT&amp;T</b> (nasdaq:T)") == "🇰🇷 AT&T (nasdaq:T)"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_format_falls_back_to_plain_text(monkeypatch):
+    """★★ **서식 때문에 알림이 사라지지 않는다.**
+
+    태그가 하나만 어긋나도 텔레그램은 메시지 **전체**를 거부한다. 서식은 읽기
+    편하자고 붙인 것이지 내용이 아니므로, 걷어내고 다시 보낸다 — 못생긴 알림이
+    없는 알림보다 낫다. 없는 알림은 "신호가 없었다"와 구분되지 않는다.
+    """
+    calls: list[dict] = []
+
+    def fake_call(self, method, payload):
+        calls.append(payload)
+        if payload.get("parse_mode"):
+            raise ValueError("텔레그램이 거부했습니다: can't parse entities")
+        return {"ok": True}
+
+    monkeypatch.setattr(TelegramChannel, "_call", fake_call)
+    channel = TelegramChannel(token="123:ABC", chat_id="42")
+
+    delivery = await channel.send("📈 <b>삼성전자</b>")
+
+    assert delivery.ok is True
+    assert [c.get("parse_mode") for c in calls] == ["HTML", None]
+    assert calls[1]["text"] == "📈 삼성전자"
+    # 되돌렸다는 사실은 남는다 — 조용히 서식이 사라지면 원인을 못 찾는다.
+    assert "can't parse entities" in delivery.error
+
+
+@pytest.mark.asyncio
+async def test_a_dead_network_is_not_retried_as_plain_text(monkeypatch):
+    """서식과 무관한 실패까지 두 번 두드리지 않는다. 네트워크는 그대로 실패다."""
+    import urllib.error
+
+    calls: list[dict] = []
+
+    def fake_call(self, method, payload):
+        calls.append(payload)
+        raise urllib.error.URLError("연결 실패")
+
+    monkeypatch.setattr(TelegramChannel, "_call", fake_call)
+    channel = TelegramChannel(token="123:ABC", chat_id="42")
+
+    delivery = await channel.send("📈 <b>삼성전자</b>")
+
+    assert delivery.ok is False
+    assert len(calls) == 1
 
 
 # --------------------------------------------------------------- 신호 id 왕복

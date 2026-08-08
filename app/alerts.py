@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +37,42 @@ log = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org"
 TIMEOUT_SECONDS = 15
+
+#: 텔레그램 서식. **HTML을 쓰고 MarkdownV2를 쓰지 않는다** — MarkdownV2는
+#: `.`·`-`·`(`·`+` 같은 흔한 문자를 전부 이스케이프해야 하는데, 이 알림에는
+#: 가격(`+2.68%`)과 종목 코드(`krx:005930`)가 매 줄 들어간다. 하나만 빠뜨려도
+#: **메시지 전체가 거부되고**, 그게 정확히 이 시스템에서 가장 나쁜 실패다.
+PARSE_MODE = "HTML"
+
+
+# --------------------------------------------------------------------------- 서식
+def esc(text: Any) -> str:
+    """HTML 특수문자를 막는다. **바깥에서 온 문자열은 전부 이걸 지난다.**
+
+    종목명은 소스가 주는 값이라 `&`가 들어올 수 있고(`AT&T`·`S&P Global`),
+    feature 이름은 전략 파일이 정하는 값이다. 하나라도 새면 텔레그램이 메시지를
+    통째로 거부한다.
+    """
+    return (
+        str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
+def bold(text: Any) -> str:
+    return f"<b>{esc(text)}</b>"
+
+
+def code(text: Any) -> str:
+    """탭하면 복사되는 조각. 다음에 칠 명령을 여기에 담는다."""
+    return f"<code>{esc(text)}</code>"
+
+
+def strip_tags(text: str) -> str:
+    """서식을 걷어낸 평문. 텔레그램이 서식을 거부했을 때의 되돌림용이다."""
+    out = re.sub(r"<[^>]+>", "", text)
+    return (
+        out.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    )
 
 
 @dataclass(frozen=True)
@@ -86,20 +123,50 @@ class TelegramChannel:
     sent: list[Delivery] = field(default_factory=list)
 
     async def send(self, text: str) -> Delivery:
-        payload: dict[str, Any] = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "disable_web_page_preview": "true",
-        }
         try:
-            await asyncio.to_thread(self._call, "sendMessage", payload)
+            await asyncio.to_thread(self._call, "sendMessage", self._payload(text))
             delivery = Delivery(datetime.now(UTC), self.id, text, ok=True)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except ValueError as exc:
+            # ★ **서식 때문에 알림이 사라지지 않게 한다.** 텔레그램은 태그가 하나만
+            #   어긋나도 메시지 **전체**를 거부한다. 서식은 읽기 편하자고 붙인 것이지
+            #   내용이 아니므로, 걷어내고 한 번 더 보낸다 — 못생긴 알림이 없는
+            #   알림보다 낫다. (거부 사유가 서식이 아니면 두 번째도 같은 이유로
+            #   실패하고, 그때는 아래에서 실패로 남는다.)
+            delivery = await self._retry_plain(text, exc)
+        except (urllib.error.URLError, OSError) as exc:
             # ★ 알림 실패로 실행을 실패시키지 않는다. 신호는 이미 기록됐고,
             #   여기서 터뜨리면 되돌릴 수 없는 것(봉 소비)이 이미 끝난 뒤다.
             delivery = Delivery(datetime.now(UTC), self.id, text, ok=False, error=str(exc))
         self.sent.append(delivery)
         return delivery
+
+    async def _retry_plain(self, text: str, original: Exception) -> Delivery:
+        """서식을 걷어내고 **서식 해석 없이** 한 번 더 보낸다.
+
+        태그가 없는 메시지도 다시 보낸다 — 이스케이프를 빠뜨린 `<`가 섞였을 때가
+        정확히 그 경우이고, `parse_mode`를 빼면 해석 자체를 하지 않아 나간다.
+        거부 사유가 서식이 아니었다면(토큰·chat_id) 두 번째도 같은 이유로 실패해
+        그대로 실패로 남는다.
+        """
+        plain = strip_tags(text)
+        try:
+            await asyncio.to_thread(
+                self._call, "sendMessage", self._payload(plain, parse_mode=None)
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            return Delivery(datetime.now(UTC), self.id, text, ok=False, error=str(exc))
+        log.warning("텔레그램이 서식을 거부해 평문으로 보냈습니다 — %s", original)
+        return Delivery(datetime.now(UTC), self.id, plain, ok=True, error=str(original))
+
+    def _payload(self, text: str, parse_mode: str | None = PARSE_MODE) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return payload
 
     def _call(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         data = urllib.parse.urlencode(payload).encode()

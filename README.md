@@ -18,7 +18,7 @@
 ```
 📈 trend_breakout_55 — 신호 1건 [15:40]
 
-· 삼성전자 (krx:005930)  307,000 (+2.68%)
+🇰🇷 삼성전자 (krx:005930)  307,000 (+2.68%)
    krx 1위/195 · trend_strength=8.204 · 손절 276,813 (-9.8%)
    stockscan explain 42
 
@@ -69,20 +69,20 @@ telegram:
   chat_id: "<채팅 ID>"
 ```
 
-전략 파일은 `~/.stockscan/<이름>.py`로, 설정 파일 **옆**에 둔다. 설정과 전략은 한 벌이라
-통째로 복사·백업할 수 있어야 하기 때문이다. 다 채운 예시는 `sample/trend_breakout_55.py`에 있다.
+전략은 설정 파일 옆에 `~/.stockscan/<이름>.py`로 둔다. 파일 하나에 전략 하나고,
+설정의 `strategy:`에 그 이름을 적으면 된다.
 
 ```bash
-stockscan strategy new my_strategy    # ~/.stockscan/my_strategy.py 템플릿
-stockscan strategy check my_strategy  # 미래를 보는 코드가 없는지 AST로 확인
+stockscan strategy new my_strategy    # 템플릿을 만든다
+stockscan strategy check my_strategy  # 미래를 보는 코드가 없는지 확인한다
 ```
 
 ```python
 class MyStrategy(Strategy):
-    id = "my_strategy"        # 파일 이름과 같아야 한다 (해시가 파일 단위라서)
-    startup_candles = 253     # 이만큼 못 채운 종목은 제외된다. 수집 깊이가 여기서 나온다
+    id = "my_strategy"        # 파일 이름과 같아야 한다
+    startup_candles = 253     # 이만큼 못 채운 종목은 빠진다. 수집 깊이도 여기서 나온다
 
-    score_feature = "score"   # 이걸 선언하면 기본 rank가 순위·백분위를 채워 준다
+    score_feature = "score"   # 선언해 두면 기본 rank가 순위·백분위를 채운다
     score_descending = True
 
     class Params(BaseModel):  # 파라미터는 여기가 정본이다. config.yml에는 적지 않는다
@@ -93,18 +93,19 @@ class MyStrategy(Strategy):
         close = item.ohlcv["close"]
         return item.with_features(score=float(close.iloc[-1] / close.iloc[-1 - p.window] - 1))
 
-    def select(self, bundle, p, ctx):     # 최종 컷 (rank는 기본 구현으로 충분하다)
+    def select(self, bundle, p, ctx):     # 최종 컷
         return top_n(bundle, p.top_n, ctx)
 ```
 
-- **파일 하나에 전략 하나다.** `compute`(종목별) → `rank`(횡단면) → `select`(컷) 순서로
-  채운다. 단일 종목 전략이면 `compute`만 채우고 나머지는 기본 구현을 쓰면 된다.
-- ⚠️ **`compute`는 과거만 봐야 한다.** `rolling`·`ewm`·`shift(+n)`은 안전하지만
-  `shift(-n)`·`center=True`·`bfill`은 미래를 본다. 백테스트를 통째로 무너뜨리는 가장
-  흔한 경로라 `strategy check`가 잡아 주는데, 통과가 곧 보장은 아니다.
-- 파라미터를 백테스트로 골라 넣지 않는다. 검증된 팩터의 표준값을 쓰고 "왜 이 값인가"를
-  docstring에 적는다. 자세한 건 [CLAUDE.md](./CLAUDE.md)의 "백테스트를 대하는 자세"에 있다.
-- 컷은 `top_n` / `top_pct` 헬퍼로 한다. 조용히 자르면 몇 개를 버렸는지 아무도 모른다.
+`compute`(종목별) → `rank`(횡단면) → `select`(컷) 순으로 채운다. 한 종목만 보는
+전략이면 `compute`만 채우고 나머지는 기본 구현에 맡겨도 된다.
+
+`compute`는 과거만 봐야 한다. `rolling`·`ewm`·`shift(+n)`은 괜찮지만 `shift(-n)`·
+`center=True`·`bfill`은 미래를 본다. `strategy check`가 잡아 주긴 하는데 통과했다고
+안전한 건 아니다.
+
+파라미터는 백테스트를 돌려 가며 고르지 않는다. 이유는 [CLAUDE.md](./CLAUDE.md)의
+"백테스트를 대하는 자세"에 적어 뒀다.
 
 ```bash
 stockscan run                  # 후보 뽑기. 기본은 dry-run이라 아무것도 남지 않는다
