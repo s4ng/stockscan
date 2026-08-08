@@ -27,11 +27,11 @@
 
 | 명령 | 설명 |
 | :--- | :--- |
-| `serve` | 평소엔 이것만 띄워 둔다. 스케줄·알림·성적표를 알아서 돌린다 |
-| `run` | 오늘의 후보를 뽑는다 |
-| `evaluate` | 신호의 사후 수익률을 채운다 |
+| `serve` | 알림 스케줄 서버 실행 |
+| `run` | 매수 후보 뽑기 |
+| `evaluate` | 신호의 사후 수익률을 채우기 |
 | `scorecard` | 성적표. 신호를 전부 샀다고 치고 승률·기저율·벤치마크 대비를 낸다 |
-| `backtest` | 한 종목을 하루씩 되감아 조건 충족일을 차트에 찍는다 |
+| `backtest` | 한 종목을 하루씩 되감아 조건 충족일을 차트로 표현 |
 
 - 설계문서: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - 작업규칙: [CLAUDE.md](./CLAUDE.md)
@@ -40,7 +40,7 @@
 
 ```bash
 uv sync
-mkdir -p ~/.stockscan && cp sample/* ~/.stockscan/   # 설정과 전략은 한 벌이다
+mkdir -p ~/.stockscan && cp sample/* ~/.stockscan/   # 설정과 전략은 한 벌
 uv run stockscan describe
 
 # 어디서든 `stockscan ...`으로 부르려면
@@ -48,7 +48,7 @@ uv tool install .                                    # stockscan 명령을 PATH�
 stockscan describe
 ```
 
-설정 파일은 `~/.stockscan/config.yml`이다.
+설정 파일: `~/.stockscan/config.yml`
 
 ```yaml
 timezone: Asia/Seoul
@@ -70,16 +70,16 @@ telegram:
 ```
 
 전략은 설정 파일 옆에 `~/.stockscan/<이름>.py`로 둔다. 파일 하나에 전략 하나고,
-설정의 `strategy:`에 그 이름을 적으면 된다.
+설정의 `strategy:` 필드에 그 이름을 적으면 된다.
 
 ```bash
-stockscan strategy new my_strategy    # 템플릿을 만든다
-stockscan strategy check my_strategy  # 미래를 보는 코드가 없는지 확인한다
+stockscan strategy new my_strategy    # 템플릿 만들기
+stockscan strategy check my_strategy  # 미래를 보는 코드가 없는지 확인
 ```
 
 ```python
 class MyStrategy(Strategy):
-    id = "my_strategy"        # 파일 이름과 같아야 한다
+    id = "my_strategy"        # 파일 이름과 같아야 함
     startup_candles = 253     # 이만큼 못 채운 종목은 빠진다. 수집 깊이도 여기서 나온다
 
     score_feature = "score"   # 선언해 두면 기본 rank가 순위·백분위를 채운다
@@ -98,14 +98,14 @@ class MyStrategy(Strategy):
 ```
 
 `compute`(종목별) → `rank`(횡단면) → `select`(컷) 순으로 채운다. 한 종목만 보는
-전략이면 `compute`만 채우고 나머지는 기본 구현에 맡겨도 된다.
+전략이면 `compute`만 채우고 나머지는 기본 구현에 맡긴다.
 
 `compute`는 과거만 봐야 한다. `rolling`·`ewm`·`shift(+n)`은 괜찮지만 `shift(-n)`·
 `center=True`·`bfill`은 미래를 본다. `strategy check`가 잡아 주긴 하는데 통과했다고
 안전한 건 아니다.
 
 파라미터는 백테스트를 돌려 가며 고르지 않는다. 이유는 [CLAUDE.md](./CLAUDE.md)의
-"백테스트를 대하는 자세"에 적어 뒀다.
+"백테스트를 대하는 자세" 참고
 
 ```bash
 stockscan run                  # 후보 뽑기. 기본은 dry-run이라 아무것도 남지 않는다
@@ -115,7 +115,7 @@ stockscan evaluate             # 사후 수익률 채우기
 stockscan scorecard --send     # 성적표를 텔레그램으로
 stockscan explain 1            # 이 신호가 왜 떴는지
 stockscan backtest krx:005930 --start 20251201
-stockscan serve                # 상주
+stockscan serve                # 서버 실행
 ```
 
 알아 둘 것 몇 가지.
